@@ -11,7 +11,6 @@ CLAUDE_BIN = os.environ.get('CLAUDE_CODE_EXECPATH', 'claude')
 #                     anthropic/claude-haiku-4-5, ollama/mistral, …)
 #   bare alias      → passed to claude -p (haiku, sonnet, opus)
 #   unset           → falls back to claude -p with 'haiku'
-_RAW_MODEL = os.environ.get('AICONTEXT_MODEL', '')
 
 
 def strip_code_fence(text: str) -> str:
@@ -35,13 +34,15 @@ def call_model(prompt: str) -> str:
     2. ANTHROPIC_API_KEY is set      → Anthropic SDK directly
     3. Fallback                      → claude -p (Claude Code session, no key needed)
     """
-    if '/' in _RAW_MODEL:
-        return _call_via_litellm(prompt, _RAW_MODEL)
+    model = os.environ.get('AICONTEXT_MODEL', '')
+
+    if '/' in model:
+        return _call_via_litellm(prompt, model)
 
     if os.environ.get('ANTHROPIC_API_KEY'):
-        return _call_via_anthropic_sdk(prompt)
+        return _call_via_anthropic_sdk(prompt, model)
 
-    return _call_via_cli(prompt)
+    return _call_via_cli(prompt, model)
 
 
 def _call_via_litellm(prompt: str, model: str) -> str:
@@ -63,20 +64,18 @@ def _call_via_litellm(prompt: str, model: str) -> str:
     return response.choices[0].message.content.strip()
 
 
-def _call_via_anthropic_sdk(prompt: str) -> str:
+def _call_via_anthropic_sdk(prompt: str, model: str) -> str:
     import anthropic
-    model = _RAW_MODEL or 'claude-haiku-4-5'
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model=model,
+        model=model or 'claude-haiku-4-5',
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text
 
 
-def _call_via_cli(prompt: str) -> str:
-    model = _RAW_MODEL or 'haiku'
+def _call_via_cli(prompt: str, model: str) -> str:
     system = (
         "You are a text generator. Output ONLY the exact content requested. "
         "Never use tools. Never ask for permission. Never describe what you will do. "
@@ -84,7 +83,7 @@ def _call_via_cli(prompt: str) -> str:
     )
     try:
         result = subprocess.run(
-            [CLAUDE_BIN, '-p', '-', '--model', model,
+            [CLAUDE_BIN, '-p', '-', '--model', model or 'haiku',
              '--output-format', 'text', '--input-format', 'text',
              '--allowedTools', '',
              '--append-system-prompt', system],
