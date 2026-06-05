@@ -1,0 +1,7 @@
+# Core — required
+anthropic>=0.40.0
+
+# Multi-provider support (optional but recommended)
+# Enables AICONTEXT_MODEL=openai/gpt-4o-mini, google/gemini-2.0-flash-lite, ollama/mistral, etc.
+# pip install litellm
+# litellm>=1.40.0
