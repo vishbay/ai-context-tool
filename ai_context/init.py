@@ -3,7 +3,8 @@
 import os
 import sys
 import fnmatch
-import anthropic
+
+from ai_context.utils import call_model, strip_code_fence
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
@@ -17,7 +18,6 @@ EXCLUDE_FILES = {
 
 EXCLUDE_PATTERNS = {'*.min.js', '*.min.css'}
 
-DEFAULT_MODEL = os.environ.get('AICONTEXT_MODEL', 'claude-haiku-4-5')
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 
 
@@ -50,26 +50,18 @@ def scan_structure(root: str) -> str:
 
 def generate_architecture_md(structure: str) -> str:
     """Call Haiku to produce an initial ARCHITECTURE.md from the repo tree."""
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=DEFAULT_MODEL,
-        max_tokens=1500,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"You are a technical writer creating a concise ARCHITECTURE.md "
-                f"for an AI coding assistant.\n\n"
-                f"Repo structure:\n```\n{structure}\n```\n\n"
-                f"Write a markdown document under {MAX_LINES} lines that covers:\n"
-                f"1. What this repo does (inferred from file names)\n"
-                f"2. Key directories and their purpose\n"
-                f"3. Important files an AI should know about\n"
-                f"4. Tech stack (inferred from file extensions and config files)\n\n"
-                f"Be concise. No filler. Return only the markdown, no explanation."
-            ),
-        }],
+    prompt = (
+        f"You are a technical writer creating a concise ARCHITECTURE.md "
+        f"for an AI coding assistant.\n\n"
+        f"Repo structure:\n```\n{structure}\n```\n\n"
+        f"Write a markdown document under {MAX_LINES} lines that covers:\n"
+        f"1. What this repo does (inferred from file names)\n"
+        f"2. Key directories and their purpose\n"
+        f"3. Important files an AI should know about\n"
+        f"4. Tech stack (inferred from file extensions and config files)\n\n"
+        f"Be concise. No filler. Return only the markdown, no explanation."
     )
-    return response.content[0].text
+    return strip_code_fence(call_model(prompt))
 
 
 def write_gitignore(context_dir: str) -> None:

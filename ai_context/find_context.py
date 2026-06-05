@@ -3,9 +3,9 @@
 import os
 import re
 import sys
-import anthropic
 
-DEFAULT_MODEL = os.environ.get('AICONTEXT_MODEL', 'claude-haiku-4-5')
+from ai_context.utils import call_model
+
 MAX_FILES = int(os.environ.get('AICONTEXT_MAX_FILES', '5'))
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 
@@ -21,30 +21,30 @@ def _read_context_file(filename: str) -> str:
 
 
 def _clean_path(line: str) -> str:
-    """Strip markdown bullets, backticks, and whitespace from a line."""
+    """Strip markdown bullets, backticks, and whitespace from a line.
+
+    Returns empty string for lines that look like prose rather than file paths.
+    """
     line = line.strip()
     line = re.sub(r'^[-*\d.]+\s*', '', line)   # leading bullets / numbered list
     line = line.strip('`').strip()
+    # Discard lines that contain spaces (prose) or no path separator / extension
+    if ' ' in line:
+        return ''
+    if '/' not in line and '.' not in line:
+        return ''
     return line
 
 
 def find_relevant_files(task: str, arch: str, decisions: str) -> list[str]:
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=DEFAULT_MODEL,
-        max_tokens=500,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Given this repo architecture:\n{arch}\n\n"
-                f"And these decisions:\n{decisions}\n\n"
-                f'For this task: "{task}"\n\n'
-                f"List ONLY the file paths that are directly relevant.\n"
-                f"No explanation. One path per line. Maximum {MAX_FILES} files."
-            ),
-        }],
+    prompt = (
+        f"Given this repo architecture:\n{arch}\n\n"
+        f"And these decisions:\n{decisions}\n\n"
+        f'For this task: "{task}"\n\n'
+        f"List ONLY the file paths that are directly relevant.\n"
+        f"No explanation. One path per line. Maximum {MAX_FILES} files."
     )
-    raw_lines = response.content[0].text.strip().splitlines()
+    raw_lines = call_model(prompt).strip().splitlines()
     paths = [_clean_path(l) for l in raw_lines if l.strip()]
     return [p for p in paths if p][:MAX_FILES]
 
