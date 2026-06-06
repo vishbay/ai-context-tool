@@ -165,7 +165,7 @@ pytest
 - [ ] `pip install` packaging (`pyproject.toml`)
 - [ ] VS Code extension (v2)
 
----
+--- 
 
 ## License
 
