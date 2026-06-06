@@ -4,7 +4,7 @@ import os
 import re
 import sys
 
-from ai_context.utils import call_model
+from cram.utils import call_model
 
 MAX_FILES = int(os.environ.get('AICONTEXT_MAX_FILES', '5'))
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))

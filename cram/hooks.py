@@ -1,4 +1,4 @@
-"""Git hook installer — wires aicontext sync into the post-commit hook."""
+"""Git hook installer — wires cram sync into the post-commit hook."""
 
 from __future__ import annotations
 import os
@@ -7,11 +7,11 @@ import sys
 
 HOOK_SCRIPT = """\
 #!/bin/sh
-# Installed by ai-context-tool — keeps .ai-context/ARCHITECTURE.md fresh
-if command -v aicontext >/dev/null 2>&1; then
-    aicontext sync
+# Installed by cram-ai — keeps .ai-context/ARCHITECTURE.md fresh
+if command -v cram >/dev/null 2>&1; then
+    cram sync
 elif command -v python3 >/dev/null 2>&1; then
-    python3 -m ai_context.sync_context
+    python3 -m cram.sync_context
 fi
 """
 
@@ -36,13 +36,13 @@ def install_hook(repo_root: str = '.') -> bool:
 
     if os.path.exists(hook_path):
         existing = open(hook_path).read()
-        if 'ai-context-tool' in existing or 'aicontext' in existing:
-            print(f"post-commit hook already contains aicontext. Skipping.")
+        if 'cram-ai' in existing or 'cram' in existing:
+            print(f"post-commit hook already contains cram. Skipping.")
             return False
         # Append to existing hook rather than overwrite
         with open(hook_path, 'a') as f:
             f.write('\n' + HOOK_SCRIPT)
-        print(f"Appended aicontext sync to existing {hook_path}")
+        print(f"Appended cram sync to existing {hook_path}")
     else:
         with open(hook_path, 'w') as f:
             f.write(HOOK_SCRIPT)
@@ -72,7 +72,7 @@ def uninstall_hook(repo_root: str = '.') -> None:
     if cleaned.strip():
         with open(hook_path, 'w') as f:
             f.write(cleaned)
-        print("Removed aicontext block from post-commit hook.")
+        print("Removed cram block from post-commit hook.")
     else:
         os.remove(hook_path)
         print("Removed post-commit hook.")
@@ -80,7 +80,7 @@ def uninstall_hook(repo_root: str = '.') -> None:
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description='Manage aicontext git hooks')
+    parser = argparse.ArgumentParser(description='Manage cram git hooks')
     parser.add_argument('action', choices=['install', 'uninstall'], default='install', nargs='?')
     parser.add_argument('path', nargs='?', default='.')
     args = parser.parse_args()

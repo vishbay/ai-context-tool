@@ -4,8 +4,8 @@ import os
 import sys
 import fnmatch
 
-from ai_context.utils import call_model, strip_code_fence
-from ai_context.hooks import install_hook
+from cram.utils import call_model, strip_code_fence
+from cram.hooks import install_hook
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',

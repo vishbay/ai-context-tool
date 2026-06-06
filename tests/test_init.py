@@ -1,11 +1,11 @@
-"""Tests for ai_context/init.py — file exclusions, tree scanning, repo setup."""
+"""Tests for cram/init.py — file exclusions, tree scanning, repo setup."""
 
 import os
 from unittest.mock import patch
 
 import pytest
 
-from ai_context.init import (
+from cram.init import (
     _is_excluded_file,
     scan_structure,
     write_gitignore,
@@ -105,7 +105,7 @@ class TestScanStructure:
         assert len(utils_line) - len(utils_line.lstrip()) > \
                len(src_line) - len(src_line.lstrip())
 
-    def test_excludes_ai_context_dir(self, tmp_path):
+    def test_excludes_cram_dir(self, tmp_path):
         ctx = tmp_path / '.ai-context'
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('')
@@ -130,12 +130,12 @@ class TestWriteGitignore:
 
 class TestInitRepo:
     def test_creates_context_dir(self, tmp_path):
-        with patch('ai_context.init.generate_architecture_md', return_value='# Arch'):
+        with patch('cram.init.generate_architecture_md', return_value='# Arch'):
             init_repo(str(tmp_path))
         assert (tmp_path / '.ai-context').is_dir()
 
     def test_creates_all_required_files(self, tmp_path):
-        with patch('ai_context.init.generate_architecture_md', return_value='# Arch'):
+        with patch('cram.init.generate_architecture_md', return_value='# Arch'):
             init_repo(str(tmp_path))
         ctx = tmp_path / '.ai-context'
         assert (ctx / 'ARCHITECTURE.md').exists()
@@ -144,32 +144,32 @@ class TestInitRepo:
         assert (ctx / '.gitignore').exists()
 
     def test_architecture_md_uses_generated_content(self, tmp_path):
-        with patch('ai_context.init.generate_architecture_md', return_value='# Generated'):
+        with patch('cram.init.generate_architecture_md', return_value='# Generated'):
             init_repo(str(tmp_path))
         content = (tmp_path / '.ai-context' / 'ARCHITECTURE.md').read_text()
         assert '# Generated' in content
 
     def test_decisions_md_uses_template(self, tmp_path):
-        with patch('ai_context.init.generate_architecture_md', return_value='# Arch'):
+        with patch('cram.init.generate_architecture_md', return_value='# Arch'):
             init_repo(str(tmp_path))
         content = (tmp_path / '.ai-context' / 'DECISIONS.md').read_text()
         assert content == DECISIONS_TEMPLATE
 
     def test_current_task_md_uses_template(self, tmp_path):
-        with patch('ai_context.init.generate_architecture_md', return_value='# Arch'):
+        with patch('cram.init.generate_architecture_md', return_value='# Arch'):
             init_repo(str(tmp_path))
         content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert content == CURRENT_TASK_TEMPLATE
 
     def test_skips_if_context_dir_exists(self, tmp_path, capsys):
         (tmp_path / '.ai-context').mkdir()
-        with patch('ai_context.init.generate_architecture_md') as mock_gen:
+        with patch('cram.init.generate_architecture_md') as mock_gen:
             init_repo(str(tmp_path))
         mock_gen.assert_not_called()
         assert 'Skipping' in capsys.readouterr().out
 
     def test_does_not_call_model_when_skipping(self, tmp_path):
         (tmp_path / '.ai-context').mkdir()
-        with patch('ai_context.utils.call_model') as mock_call:
+        with patch('cram.utils.call_model') as mock_call:
             init_repo(str(tmp_path))
         mock_call.assert_not_called()

@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/vishbay/ai-context-tool/ai_context)",
+      "Bash(mkdir -p /Users/vishbay/ai-context-tool/templates/skills)",
+      "Bash(mkdir -p /Users/vishbay/ai-context-tool/tests)",
+      "Bash(mkdir -p /Users/vishbay/ai-context-tool/.git/hooks)",
+      "Skill(claude-api)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(gh repo *)",
+      "Bash(env)",
+      "Read(//Users/vishbay/.claude/**)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k\\) for k in d.keys\\(\\)]\")",
+      "Bash(security find-generic-password *)",
+      "Bash(security find-internet-password *)",
+      "Bash(python3 *)",
+      "Bash(claude *)",
+      "Bash(python *)",
+      "Bash(git push *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(pip3 install *)",
+      "Bash(python3.13 -m venv .venv)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/aicontext --help)",
+      "Bash(.venv/bin/aicontext status *)",
+      "Bash(.venv/bin/aicontext hook *)",
+      "Bash(curl -s https://pypi.org/pypi/cram/json)",
+      "Bash(curl -s https://pypi.org/pypi/brief/json)",
+      "Bash(curl -s https://pypi.org/pypi/aibrief/json)",
+      "Bash(curl -s https://pypi.org/pypi/cram-ai/json)",
+      "Bash(.venv/bin/cram --help)",
+      "Bash(git remote *)"
+    ]
+  }
+}

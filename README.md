@@ -1,4 +1,4 @@
-# ai-context-tool
+# cram-ai
 
 > Cut AI coding token costs by 98% with curated context files.
 
@@ -44,20 +44,20 @@ your-repo/
     └── CURRENT_TASK.md   ← per-session: task description + relevant file contents inlined
 ```
 
-`CURRENT_TASK.md` is populated before each session by `aicontext task "..."`. It identifies the 3–5 relevant files and inlines their content — so Sonnet starts the session with everything it needs and never hunts for files itself.
+`CURRENT_TASK.md` is populated before each session by `cram task "..."`. It identifies the 3–5 relevant files and inlines their content — so Sonnet starts the session with everything it needs and never hunts for files itself.
 
 ---
 
 ## Quick start
 
 ```bash
-pip install ai-context-tool
+pip install cram-ai
 
 cd your-repo
-aicontext init                        # one-time setup, ~30 seconds
-aicontext task "add login validation" # run before every coding session
+cram init                        # one-time setup, ~30 seconds
+cram task "add login validation" # run before every coding session
 # → opens your editor / AI extension with context pre-loaded
-aicontext sync                        # run after every commit
+cram sync                        # run after every commit
 ```
 
 **First command to last file: under 5 minutes.**
@@ -68,10 +68,10 @@ aicontext sync                        # run after every commit
 
 | Command | When to run | What it does |
 |---|---|---|
-| `aicontext init` | Once per repo | Scans structure, generates `ARCHITECTURE.md` via a cheap model |
-| `aicontext task "..."` | Before every session | Identifies relevant files, inlines them into `CURRENT_TASK.md` |
-| `aicontext sync` | After every commit | Updates `ARCHITECTURE.md` from git diff |
-| `aicontext status` | Anytime | Shows `.ai-context/` files and last-updated timestamps |
+| `cram init` | Once per repo | Scans structure, generates `ARCHITECTURE.md` via a cheap model |
+| `cram task "..."` | Before every session | Identifies relevant files, inlines them into `CURRENT_TASK.md` |
+| `cram sync` | After every commit | Updates `ARCHITECTURE.md` from git diff |
+| `cram status` | Anytime | Shows `.ai-context/` files and last-updated timestamps |
 
 ---
 
@@ -81,26 +81,26 @@ The tool is model-agnostic. Set `AICONTEXT_MODEL` to any provider:
 
 ```bash
 # Anthropic (default, used via Claude Code session — no key needed)
-aicontext init
+cram init
 
 # Anthropic SDK
 export ANTHROPIC_API_KEY=sk-...
 export AICONTEXT_MODEL=anthropic/claude-haiku-4-5
-aicontext init
+cram init
 
 # OpenAI
 export OPENAI_API_KEY=sk-...
 export AICONTEXT_MODEL=openai/gpt-4o-mini
-aicontext init
+cram init
 
 # Google Gemini
 export GEMINI_API_KEY=...
 export AICONTEXT_MODEL=gemini/gemini-2.5-flash
-aicontext init
+cram init
 
 # Local (Ollama — free, no key)
 export AICONTEXT_MODEL=ollama/mistral
-aicontext init
+cram init
 ```
 
 The `.ai-context/` files it produces work with any AI coding extension: Claude Code, Cursor, Continue.dev, GitHub Copilot, Windsurf.
@@ -111,10 +111,10 @@ The `.ai-context/` files it produces work with any AI coding extension: Claude C
 
 The context files eliminate orientation cost. These rules eliminate the rest:
 
-1. **Run `aicontext task "..."` before every session** — never let the model hunt for files itself.
+1. **Run `cram task "..."` before every session** — never let the model hunt for files itself.
 2. **Hard session boundary** — end the session the moment a feature works. New code = growing context = rising cost.
 3. **Same file + same feature** = stay in session. Different file or concern = new session.
-4. **Run `aicontext sync` after every commit** — keeps `ARCHITECTURE.md` accurate.
+4. **Run `cram sync` after every commit** — keeps `ARCHITECTURE.md` accurate.
 5. **Edit `DECISIONS.md` manually** — record choices the model should always respect (e.g. "use Pinia not Vuex", "no default exports").
 
 ---
@@ -155,12 +155,12 @@ pytest
 
 ## Build order / status
 
-- [x] `aicontext init` — repo setup, ARCHITECTURE.md generation
-- [x] `aicontext task` — pre-session file discovery
-- [x] `aicontext sync` — post-session ARCHITECTURE.md update
+- [x] `cram init` — repo setup, ARCHITECTURE.md generation
+- [x] `cram task` — pre-session file discovery
+- [x] `cram sync` — post-session ARCHITECTURE.md update
 - [x] Multi-provider support via litellm
 - [x] Test suite (72 tests)
-- [ ] `aicontext status` — context freshness report
+- [ ] `cram status` — context freshness report
 - [ ] Git post-commit hook installer
 - [ ] `pip install` packaging (`pyproject.toml`)
 - [ ] VS Code extension (v2)

@@ -4,8 +4,8 @@ import os
 import subprocess
 import sys
 
-from ai_context.init import scan_structure
-from ai_context.utils import call_model, strip_code_fence
+from cram.init import scan_structure
+from cram.utils import call_model, strip_code_fence
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 

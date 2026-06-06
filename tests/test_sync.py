@@ -1,11 +1,11 @@
-"""Tests for ai_context/sync_context.py — git diff, architecture update, sync flow."""
+"""Tests for cram/sync_context.py — git diff, architecture update, sync flow."""
 
 import subprocess
 from unittest.mock import patch, call
 
 import pytest
 
-from ai_context.sync_context import get_git_diff, update_architecture_md, sync
+from cram.sync_context import get_git_diff, update_architecture_md, sync
 
 
 # ---------------------------------------------------------------------------
@@ -45,8 +45,8 @@ class TestGetGitDiff:
 
 class TestUpdateArchitectureMd:
     def test_calls_model_with_all_three_inputs(self):
-        with patch('ai_context.sync_context.call_model', return_value='# Updated') as mock:
-            with patch('ai_context.sync_context.strip_code_fence', side_effect=lambda x: x):
+        with patch('cram.sync_context.call_model', return_value='# Updated') as mock:
+            with patch('cram.sync_context.strip_code_fence', side_effect=lambda x: x):
                 update_architecture_md('structure', 'diff', 'current')
         prompt = mock.call_args[0][0]
         assert 'structure' in prompt
@@ -54,13 +54,13 @@ class TestUpdateArchitectureMd:
         assert 'current' in prompt
 
     def test_strips_code_fence_from_response(self):
-        with patch('ai_context.sync_context.call_model', return_value='```\n# Arch\n```'):
+        with patch('cram.sync_context.call_model', return_value='```\n# Arch\n```'):
             result = update_architecture_md('s', 'd', 'c')
         assert result == '# Arch'
 
     def test_returns_model_output(self):
-        with patch('ai_context.sync_context.call_model', return_value='# New Arch'):
-            with patch('ai_context.sync_context.strip_code_fence', side_effect=lambda x: x):
+        with patch('cram.sync_context.call_model', return_value='# New Arch'):
+            with patch('cram.sync_context.strip_code_fence', side_effect=lambda x: x):
                 result = update_architecture_md('s', 'd', 'c')
         assert result == '# New Arch'
 
@@ -79,9 +79,9 @@ class TestSync:
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('# Old Arch')
 
-        with patch('ai_context.sync_context.get_git_diff', return_value='diff text'):
-            with patch('ai_context.sync_context.scan_structure', return_value='tree'):
-                with patch('ai_context.sync_context.call_model', return_value='# New Arch'):
+        with patch('cram.sync_context.get_git_diff', return_value='diff text'):
+            with patch('cram.sync_context.scan_structure', return_value='tree'):
+                with patch('cram.sync_context.call_model', return_value='# New Arch'):
                     sync(str(tmp_path))
 
         content = (ctx / 'ARCHITECTURE.md').read_text()
@@ -92,9 +92,9 @@ class TestSync:
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('# Existing Context')
 
-        with patch('ai_context.sync_context.get_git_diff', return_value='diff'):
-            with patch('ai_context.sync_context.scan_structure', return_value='tree'):
-                with patch('ai_context.sync_context.call_model', return_value='# Updated') as mock:
+        with patch('cram.sync_context.get_git_diff', return_value='diff'):
+            with patch('cram.sync_context.scan_structure', return_value='tree'):
+                with patch('cram.sync_context.call_model', return_value='# Updated') as mock:
                     sync(str(tmp_path))
 
         prompt = mock.call_args[0][0]
@@ -105,9 +105,9 @@ class TestSync:
         ctx.mkdir()
         # No ARCHITECTURE.md — should not crash
 
-        with patch('ai_context.sync_context.get_git_diff', return_value='diff'):
-            with patch('ai_context.sync_context.scan_structure', return_value='tree'):
-                with patch('ai_context.sync_context.call_model', return_value='# Fresh'):
+        with patch('cram.sync_context.get_git_diff', return_value='diff'):
+            with patch('cram.sync_context.scan_structure', return_value='tree'):
+                with patch('cram.sync_context.call_model', return_value='# Fresh'):
                     sync(str(tmp_path))
 
         assert (ctx / 'ARCHITECTURE.md').read_text() == '# Fresh'
@@ -117,9 +117,9 @@ class TestSync:
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('')
 
-        with patch('ai_context.sync_context.get_git_diff', return_value='my diff'):
-            with patch('ai_context.sync_context.scan_structure', return_value='my tree'):
-                with patch('ai_context.sync_context.call_model', return_value='# ok') as mock:
+        with patch('cram.sync_context.get_git_diff', return_value='my diff'):
+            with patch('cram.sync_context.scan_structure', return_value='my tree'):
+                with patch('cram.sync_context.call_model', return_value='# ok') as mock:
                     sync(str(tmp_path))
 
         prompt = mock.call_args[0][0]

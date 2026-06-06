@@ -1,10 +1,10 @@
-"""Single entry point: dispatches `aicontext <subcommand>` to the right module."""
+"""Single entry point: dispatches `cram <subcommand>` to the right module."""
 
 import sys
 
 
 USAGE = """\
-Usage: aicontext <command> [args]
+Usage: cram <command> [args]
 
 Commands:
   init   [path]       One-time repo setup — generates .ai-context/ files
@@ -23,18 +23,18 @@ def main() -> None:
         sys.exit(0)
 
     cmd, rest = args[0], args[1:]
-    sys.argv = [f'aicontext {cmd}'] + rest  # rewrite for submodule arg parsers
+    sys.argv = [f'cram {cmd}'] + rest  # rewrite for submodule arg parsers
 
     if cmd == 'init':
-        from ai_context.init import main as _main
+        from cram.init import main as _main
     elif cmd == 'task':
-        from ai_context.find_context import main as _main
+        from cram.find_context import main as _main
     elif cmd == 'sync':
-        from ai_context.sync_context import main as _main
+        from cram.sync_context import main as _main
     elif cmd == 'status':
-        from ai_context.status import main as _main
+        from cram.status import main as _main
     elif cmd == 'hook':
-        from ai_context.hooks import main as _main
+        from cram.hooks import main as _main
     else:
         print(f"Unknown command: {cmd!r}\n")
         print(USAGE)

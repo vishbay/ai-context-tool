@@ -1,11 +1,11 @@
-"""Tests for ai_context/find_context.py — path cleaning, file inlining, CLI flow."""
+"""Tests for cram/find_context.py — path cleaning, file inlining, CLI flow."""
 
 import os
 from unittest.mock import patch
 
 import pytest
 
-from ai_context.find_context import (
+from cram.find_context import (
     _clean_path,
     _read_truncated,
     find_relevant_files,
@@ -49,7 +49,7 @@ class TestCleanPath:
         assert _clean_path('src/file') == 'src/file'
 
     def test_accepts_nested_path(self):
-        assert _clean_path('ai_context/utils.py') == 'ai_context/utils.py'
+        assert _clean_path('cram/utils.py') == 'cram/utils.py'
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ class TestReadTruncated:
         assert 'omitted' not in result
 
     def test_truncates_and_adds_marker(self, tmp_path, monkeypatch):
-        import ai_context.find_context as fc
+        import cram.find_context as fc
         monkeypatch.setattr(fc, 'MAX_LINES', 2)
         f = tmp_path / 'big.py'
         f.write_text('\n'.join(f'line{i}' for i in range(10)))
@@ -83,34 +83,34 @@ class TestReadTruncated:
 
 class TestFindRelevantFiles:
     def test_returns_cleaned_file_paths(self):
-        mock_response = 'src/main.py\nai_context/utils.py\n'
-        with patch('ai_context.find_context.call_model', return_value=mock_response):
+        mock_response = 'src/main.py\ncram/utils.py\n'
+        with patch('cram.find_context.call_model', return_value=mock_response):
             result = find_relevant_files('add feature', '# Arch', '# Decisions')
         assert 'src/main.py' in result
-        assert 'ai_context/utils.py' in result
+        assert 'cram/utils.py' in result
 
     def test_strips_prose_from_response(self):
         mock_response = (
             'Here are the relevant files:\n'
             'src/main.py\n'
-            '- ai_context/utils.py\n'
+            '- cram/utils.py\n'
         )
-        with patch('ai_context.find_context.call_model', return_value=mock_response):
+        with patch('cram.find_context.call_model', return_value=mock_response):
             result = find_relevant_files('add feature', '', '')
         assert 'src/main.py' in result
-        assert 'ai_context/utils.py' in result
+        assert 'cram/utils.py' in result
         assert any('Here' in p for p in result) is False
 
     def test_respects_max_files_limit(self, monkeypatch):
-        import ai_context.find_context as fc
+        import cram.find_context as fc
         monkeypatch.setattr(fc, 'MAX_FILES', 2)
         mock_response = 'a/b.py\nc/d.py\ne/f.py\ng/h.py'
-        with patch('ai_context.find_context.call_model', return_value=mock_response):
+        with patch('cram.find_context.call_model', return_value=mock_response):
             result = find_relevant_files('task', '', '')
         assert len(result) <= 2
 
     def test_passes_task_and_context_to_model(self):
-        with patch('ai_context.find_context.call_model', return_value='src/a.py') as mock_call:
+        with patch('cram.find_context.call_model', return_value='src/a.py') as mock_call:
             find_relevant_files('my task', '# Arch content', '# Dec content')
         prompt = mock_call.call_args[0][0]
         assert 'my task' in prompt
@@ -184,7 +184,7 @@ class TestFindContext:
         (tmp_path / '.ai-context').mkdir()
         # No ARCHITECTURE.md created — should warn but not crash
 
-        with patch('ai_context.find_context.call_model', return_value=''):
+        with patch('cram.find_context.call_model', return_value=''):
             find_context('some task')
 
         assert 'Warning' in capsys.readouterr().err
@@ -197,7 +197,7 @@ class TestFindContext:
         (ctx / 'DECISIONS.md').write_text('# Dec')
         (tmp_path / 'main.py').write_text('print("hello")\n')
 
-        with patch('ai_context.find_context.call_model', return_value='main.py'):
+        with patch('cram.find_context.call_model', return_value='main.py'):
             find_context('fix the print')
 
         content = (ctx / 'CURRENT_TASK.md').read_text()

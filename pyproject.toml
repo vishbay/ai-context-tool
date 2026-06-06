@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-context-tool"
+name = "cram-ai"
 version = "0.1.0"
 description = "Cut AI coding token costs by 98% with curated .ai-context/ files"
 readme = "README.md"
@@ -18,11 +18,11 @@ multi-provider = ["litellm>=1.40.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-aicontext = "ai_context.cli:main"
+cram = "cram.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/vishbay/ai-context-tool"
-Repository = "https://github.com/vishbay/ai-context-tool"
+Homepage = "https://github.com/vishbay/cram-ai"
+Repository = "https://github.com/vishbay/cram-ai"
 
 [tool.setuptools.packages.find]
-include = ["ai_context*"]
+include = ["cram*"]
