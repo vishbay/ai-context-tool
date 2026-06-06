@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ai-context-tool"
+version = "0.1.0"
+description = "Cut AI coding token costs by 98% with curated .ai-context/ files"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+]
+
+[project.optional-dependencies]
+multi-provider = ["litellm>=1.40.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+aicontext = "ai_context.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/vishbay/ai-context-tool"
+Repository = "https://github.com/vishbay/ai-context-tool"
+
+[tool.setuptools.packages.find]
+include = ["ai_context*"]

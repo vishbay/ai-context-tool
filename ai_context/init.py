@@ -5,6 +5,7 @@ import sys
 import fnmatch
 
 from ai_context.utils import call_model, strip_code_fence
+from ai_context.hooks import install_hook
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
@@ -118,6 +119,8 @@ def init_repo(target: str = '.') -> None:
         f.write(CURRENT_TASK_TEMPLATE)
 
     write_gitignore(context_dir)
+
+    install_hook(root)
 
     print(f"\nDone. Created .ai-context/ with:")
     for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']:
