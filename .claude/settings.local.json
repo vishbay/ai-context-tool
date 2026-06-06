@@ -31,7 +31,9 @@
       "Bash(curl -s https://pypi.org/pypi/aibrief/json)",
       "Bash(curl -s https://pypi.org/pypi/cram-ai/json)",
       "Bash(.venv/bin/cram --help)",
-      "Bash(git remote *)"
+      "Bash(git remote *)",
+      "Bash(printf '#!/bin/sh\\\\n# Installed by cram-ai — keeps .ai-context/ARCHITECTURE.md fresh\\\\nif command -v cram >/dev/null 2>&1; then\\\\n    cram sync\\\\nelif command -v python3 >/dev/null 2>&1; then\\\\n    python3 -m cram.sync_context\\\\nfi\\\\n')",
+      "Bash(chmod +x .git/hooks/post-commit)"
     ]
   }
 }
