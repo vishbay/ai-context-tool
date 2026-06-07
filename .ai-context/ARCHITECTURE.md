@@ -1,13 +1,13 @@
 # Architecture
 
 ## Overview
-ai-context-tool is a utility for discovering, initializing, and synchronizing context information for AI coding assistants. It scans codebases to extract relevant context, manages project configuration, and maintains Claude-specific settings for zero-key integration workflows.
+cram-ai is a utility for discovering, initializing, and synchronizing context information for AI coding assistants. It scans codebases to extract relevant context, manages project configuration, and maintains Claude-specific settings for zero-key integration workflows.
 
 ## Directory Structure
 
-### `ai_context/`
+### `cram/`
 Core Python package containing main functionality:
-- `cli.py` - Single entry point dispatching `aicontext <subcommand>` to appropriate modules
+- `cli.py` - Single entry point dispatching `cram <subcommand>` to appropriate modules
 - `find_context.py` - Scans and extracts relevant context from codebases
 - `init.py` - Initializes project configuration and CLAUDE.md files; triggers hook installation
 - `sync_context.py` - Synchronizes context with external systems and backends
@@ -56,13 +56,13 @@ Test suite for the package functionality
 
 ## Entry Points
 
-CLI commands dispatched through unified `aicontext` entry point:
-- `aicontext init [path]` - Bootstrap project configuration and install git hook
-- `aicontext task "<description>"` - Populate CURRENT_TASK.md before coding session
-- `aicontext sync [path]` - Update ARCHITECTURE.md after commit
-- `aicontext status [path]` - Show .ai-context/ freshness and sync state
-- `aicontext hook install|uninstall [path]` - Manage git post-commit hook
+CLI commands dispatched through unified `cram` entry point:
+- `cram init [path]` - Bootstrap project configuration and install git hook
+- `cram task "<description>"` - Populate CURRENT_TASK.md before coding session
+- `cram sync [path]` - Update ARCHITECTURE.md after commit
+- `cram status [path]` - Show .ai-context/ freshness and sync state
+- `cram hook install|uninstall [path]` - Manage git post-commit hook
 
 ## Dependencies
 
-All Python dependencies specified in `requirements.txt` and `pyproject.toml`. Install with `pip install -e .` or `pip install -r requirements.txt`.
+All Python dependencies specified in `requirements.txt` and `pyproject.toml`. Install with `pip install -e .` or `pip install cram-ai`.

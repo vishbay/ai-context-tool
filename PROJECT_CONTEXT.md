@@ -1,579 +1,731 @@
 # PROJECT_CONTEXT.md
-# ai-context-tool — Claude Code Handoff Document
+# cram-ai — Claude Code Handoff Document
 
 ## Problem Statement
 
-Developers using AI coding extensions in VS Code (with Claude Sonnet/Haiku access via
-enterprise GenAI gateways) are hitting monthly token cost limits ($200/month cap).
-Root cause: the extension auto-indexes entire repos on every session, generating
-massive cache writes (70% of total token usage). Cache writes cost 3-4x more than
-cache reads.
+Developers using AI coding extensions (Claude Code, Cursor, Copilot, Continue.dev, Windsurf)
+are burning expensive cache-write tokens on orientation before a single line of code is written.
+AI extensions auto-index entire repos on every session. Cache writes cost 3–4× more than
+cache reads. On a large monorepo this can consume $1.57 per session before any coding happens.
 
 ## Solution
 
-A lightweight, open source CLI tool that maintains a set of curated `.ai-context/`
-markdown files per repo. These files act as a manual RAG system — giving the AI
-model a precise map of the codebase instead of letting it index everything.
+A lightweight, open source CLI called `cram` (pip package: `cram-ai`) that maintains a set of
+curated `.cram-ai-context/` markdown files per repo. These act as a manual RAG system — giving
+the AI model a precise map of the codebase instead of letting it index everything.
 
 Key insight: AI coding agents spend most tokens on **orientation, not problem solving**.
-A 12,000-token session often only needed 800 tokens of actual work. The `.ai-context/`
-system eliminates orientation cost.
+A 12,000-token session often only needs 800 tokens of actual work. `.cram-ai-context/`
+eliminates orientation cost.
 
 ---
 
-## Validated Results
+## Validated Results (Hoppscotch benchmark)
 
-- Cache writes dropped drastically per 1k requests after adopting `.ai-context/` files
-- Cost reduction confirmed on real Vue.js and Streamlit projects
-- Approach maps to established RAG and context compaction patterns
+Repo: hoppscotch/hoppscotch — 12-package monorepo, 2,151 source files, Vue 3 + NestJS + Tauri
+
+| Scenario | Tokens | Cost / session | Reduction |
+|---|---|---|---|
+| Without cram (full index) | 418,697 | $1.57 | — |
+| With cram (first session) | 7,239 | $0.027 | 98.3% |
+| With cram (cached) | 7,239 | $0.002 | 99.9% |
+
+Pricing basis: Claude Sonnet cache-write rate ($3.75/1M tokens).
 
 ---
 
-## Folder Structure to Build
+## Current Repo Structure
 
 ```
-ai-context-tool/                  ← repo root
-├── README.md                     ← before/after numbers, quick start
-├── setup.py / pyproject.toml     ← pip installable
-├── ai_context/
-│   ├── __init__.py
-│   ├── init.py                   ← scans repo, generates initial .ai-context/ files
-│   ├── find_context.py           ← identifies relevant files for a task
-│   ├── sync_context.py           ← post-session update script
-│   └── utils.py                  ← shared helpers
-├── templates/
-│   ├── ARCHITECTURE.md           ← repo structure map template
-│   ├── DECISIONS.md              ← architectural decisions template
-│   ├── CURRENT_TASK.md           ← per-session task context template
-│   └── skills/
-│       ├── fix-bug.md
-│       ├── new-component.md
-│       ├── add-api-endpoint.md
-│       └── refactor.md
-├── .git/hooks/
-│   └── post-commit               ← auto-runs sync after every commit
+cram-ai/                          ← repo root
+├── README.md
+├── PROJECT_CONTEXT.md
+├── setup.py                      ← shim for pip < 21.3
+├── pyproject.toml                ← pip installable, entry points
+├── pytest.ini
+├── cram/                         ← Python package
+│   ├── __init__.py               ← __version__ = "0.1.0"
+│   ├── cli.py                    ← single `cram` entry point, dispatches subcommands
+│   ├── init.py                   ← one-time repo setup
+│   ├── find_context.py           ← pre-session file discovery + --target writing
+│   ├── sync_context.py           ← post-commit ARCHITECTURE.md update
+│   ├── status.py                 ← context freshness + staleness warnings + get_status_dict()
+│   ├── hooks.py                  ← git post-commit hook install/uninstall
+│   ├── targets.py                ← writes context to cram-owned tool instruction files
+│   ├── menubar.py                ← Mac-only (rumps) — superseded by tray.py, kept for reference
+│   ├── tray.py                   ← cross-platform tray entry point (pystray + pywebview)
+│   ├── tray_server.py            ← local Flask bridge (port 49155) — popup JS ↔ cram CLI
+│   ├── tray_ui/
+│   │   ├── popup.html            ← popup UI (task + metrics + workflow guide)
+│   │   ├── popup.css             ← dark cosmic theme, compact/full modes, help panel
+│   │   └── popup.js              ← fetch /status + /metrics, minimize/expand, help toggle
+│   └── utils.py                  ← call_model(), strip_code_fence(), routing logic
 └── tests/
-    └── test_find_context.py
+    ├── test_utils.py             ← 14 tests
+    ├── test_init.py              ← 23 tests
+    ├── test_find_context.py      ← 23 tests
+    └── test_sync.py              ← 11 tests (72 total, all passing)
 ```
 
 ---
 
-## Core Scripts — Logic Already Designed
+## CLI Commands
 
-### 1. `init.py` — One-time repo setup
-- Scans repo structure using `find` or `os.walk`
-- Excludes: `node_modules`, `dist`, `build`, `__pycache__`, lock files, `.git`
-- Uses a cheap model (Haiku or Gemini Flash) to generate initial `ARCHITECTURE.md`
-- Creates all `.ai-context/` template files
-- Writes `.ai-context/.gitignore` to exclude `CURRENT_TASK.md` from git
-
-**Key logic:**
-```python
-EXCLUDE_DIRS = {
-    'node_modules', 'dist', 'build', '__pycache__',
-    '.git', '.venv', 'venv', 'coverage', '.next'
-}
-EXCLUDE_FILES = {
-    'package-lock.json', 'yarn.lock', 'poetry.lock',
-    '*.min.js', '*.min.css'
-}
-```
-
-### 2. `find_context.py` — Pre-session file discovery (most important script)
-- Takes a task description as CLI argument
-- Reads `ARCHITECTURE.md` and `DECISIONS.md`
-- Calls Haiku/cheap model to identify the 3-5 relevant files for the task
-- Inlines those file contents directly into `CURRENT_TASK.md`
-- Result: Sonnet session starts with everything it needs, zero hunting
-
-**Usage:**
 ```bash
-python find_context.py "add validation to the login form"
-# or after pip install:
-aicontext task "add validation to the login form"
+cram init [path]                        # one-time repo setup
+cram task "<description>" [--target T]  # populate CURRENT_TASK.md + auto-load into tool
+cram sync [path]                        # update ARCHITECTURE.md after a commit
+cram status [path]                      # show .cram-ai-context/ freshness
+cram hook install|uninstall [path]      # manage git post-commit hook
+cram menu [path]                        # launch Mac menu bar app
 ```
 
-**Core logic:**
-```python
-def find_relevant_files(task: str, arch: str, decisions: str) -> list[str]:
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=500,
-        messages=[{
-            "role": "user",
-            "content": f"""Given this repo architecture:
-{arch}
+`--target` choices: `cursor | claude | copilot | codex | windsurf | all`
 
-And these decisions:
-{decisions}
-
-For this task: "{task}"
-
-List ONLY the file paths that are directly relevant.
-No explanation. One path per line. Maximum 5 files."""
-        }]
-    )
-    return response.content[0].text.strip().split("\n")
-
-def populate_current_task(task: str, files: list[str]):
-    with open(".ai-context/CURRENT_TASK.md", "w") as out:
-        out.write(f"## Task\n{task}\n\n## Relevant Files\n")
-        for fpath in files:
-            fpath = fpath.strip()
-            if os.path.exists(fpath):
-                out.write(f"\n### {fpath}\n```\n")
-                with open(fpath) as code:
-                    out.write(code.read())
-                out.write("\n```\n")
-```
-
-### 3. `sync_context.py` — Post-session context update
-- Gets git diff from last commit
-- Gets current repo structure
-- Sends both + existing `ARCHITECTURE.md` to cheap model
-- Writes updated `ARCHITECTURE.md`
-- Designed to run automatically via git post-commit hook
-
-**Usage:**
-```bash
-python sync_context.py
-# or automatically via git hook
-```
-
-**Core logic:**
-```python
-def get_git_diff() -> str:
-    return subprocess.check_output(
-        ["git", "diff", "HEAD~1", "--stat", "--unified=2"]
-    ).decode()
-
-def update_architecture_md(structure: str, diff: str, current: str) -> str:
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1000,
-        messages=[{
-            "role": "user",
-            "content": f"""Update this ARCHITECTURE.md based on recent changes.
-Keep it under 300 lines. Only update what changed.
-
-Current ARCHITECTURE.md:
-{current}
-
-Repo structure:
-{structure}
-
-Recent git diff:
-{diff}
-
-Return only the updated markdown, no explanation."""
-        }]
-    )
-    return response.content[0].text
+Set a permanent default in `.cram-ai-context/config.toml`:
+```toml
+[task]
+default_target = "cursor"
 ```
 
 ---
 
-## Model Strategy (Important)
+## Context Directory
 
-| Task | Model | Reason |
+`.cram-ai-context/` is created at the repo root by `cram init`.
+
+| File | Purpose | Managed by |
 |---|---|---|
-| Repo discovery, init | Gemma (free) or Haiku | Cheap orientation work |
-| find_context.py calls | Haiku | Cheap, fast file identification |
-| sync_context.py calls | Haiku | Simple summarization |
-| Actual coding sessions | Sonnet | Quality code generation only |
-
-The tool itself should be model-agnostic via environment variable:
-```bash
-AICONTEXT_MODEL=claude-haiku-4-5-20251001
-ANTHROPIC_API_KEY=your_key
-```
+| `ARCHITECTURE.md` | Repo structure, tech stack, key files | `cram init` + `cram sync` |
+| `DECISIONS.md` | Architectural rules the AI must respect | Developer (manual) |
+| `CURRENT_TASK.md` | Task description + inlined relevant files | `cram task` |
+| `.gitignore` | Excludes `CURRENT_TASK.md` from git | `cram init` |
+| `config.toml` | Optional: `default_target`, etc. | Developer (manual) |
+| `CLAUDE.md` | Claude Code auto-loaded context (if target=claude) | `cram task` |
+| `AGENTS.md` | Codex auto-loaded context (if target=codex) | `cram task` |
 
 ---
 
-## Session Discipline Rules (Document in README)
+## --target: How Context Auto-Loads Per Tool
 
-1. **Hard session boundary** — end session the moment a feature works, not when
-   the whole task feels done. New code = growing context = snowballing cost.
-2. **Same file + same feature** = stay in session. Different file or concern = new session.
-3. **$5 per session budget** — confirmed effective in testing.
-4. **Always run `find_context.py` before starting a Sonnet session** — never let
-   Sonnet hunt for files itself.
-5. **Run `sync_context.py` after every commit** — keep ARCHITECTURE.md fresh.
+Each target writes a **cram-owned file** the tool reads automatically.
+No shared developer-managed files (CLAUDE.md, copilot-instructions.md, etc.) are ever modified.
 
----
-
-## Skills Template Contents
-
-### `skills/fix-bug.md`
-```markdown
-## Task: Fix Bug
-
-Context files to read first:
-- .ai-context/ARCHITECTURE.md
-- .ai-context/DECISIONS.md
-- .ai-context/CURRENT_TASK.md (contains relevant files already inlined)
-
-Process:
-1. Read the error message fully before touching any code
-2. State your hypothesis before making changes
-3. Change ONE thing at a time
-4. Confirm fix before moving to next issue
-```
-
-### `skills/new-component.md`
-```markdown
-## Task: New Component
-
-Context files to read first:
-- .ai-context/ARCHITECTURE.md
-- .ai-context/DECISIONS.md
-- .ai-context/CURRENT_TASK.md
-
-Rules:
-- Use Composition API only (no Options API)
-- Props must be typed
-- Follow existing naming conventions in ARCHITECTURE.md
-- Use shared components from the path listed in ARCHITECTURE.md
-- Do not read files outside CURRENT_TASK.md without asking first
-```
-
-### `skills/refactor.md`
-```markdown
-## Task: Refactor
-
-Context files to read first:
-- .ai-context/ARCHITECTURE.md
-- .ai-context/DECISIONS.md
-- .ai-context/CURRENT_TASK.md
-
-Rules:
-- Explain the refactor plan BEFORE writing any code
-- Get confirmation before proceeding
-- Do not expand scope beyond files in CURRENT_TASK.md
-```
+| Target | File written | How it loads |
+|---|---|---|
+| `cursor` | `.cursor/rules/cram-task.md` | Cursor reads every file in `.cursor/rules/` |
+| `claude` | `.cram-ai-context/CLAUDE.md` | Claude Code reads `CLAUDE.md` recursively in subdirs |
+| `copilot` | `.github/cram-task.md` | Requires one-time include in `copilot-instructions.md` |
+| `codex` | `.cram-ai-context/AGENTS.md` | Codex reads `AGENTS.md` recursively in subdirs |
+| `windsurf` | `.windsurf/rules/cram-task.md` | Windsurf reads every file in `.windsurf/rules/` |
 
 ---
 
-## Target Users
+## Model Routing (utils.py)
 
-- Individual developers using VS Code AI extensions with token cost limits
-- Teams on enterprise GenAI gateways (no control over extension behaviour)
-- Anyone using Claude Code, Cursor, Continue.dev, Copilot with large repos
-- Works with any model: Claude, Gemini, Gemma, GPT
+`call_model()` routes based on `AICONTEXT_MODEL` env var:
 
----
+| Condition | Route |
+|---|---|
+| `AICONTEXT_MODEL` contains `/` | litellm (`provider/model` string) |
+| `ANTHROPIC_API_KEY` set | Anthropic SDK directly |
+| Neither | `claude -p` subprocess (uses Claude Code's active session) |
 
-## Differentiator vs Existing Tools
-
-- **CLAUDE.md / AGENTS.md** — manual, no tooling
-- **Cursor .cursorrules** — extension-specific, no file discovery
-- **Continue.dev context providers** — complex setup
-- **RAG tools (Pinecone, Weaviate)** — infrastructure-heavy, overkill for one dev
-
-This tool: **local, zero infrastructure, works in 5 minutes, any extension, any model.**
-
----
-
-## Build Order for v1
-
-1. `init.py` — get the folder structure and templates generating correctly
-2. `find_context.py` — the core value, most important to get right
-3. `sync_context.py` — post-session update automation
-4. `post-commit` git hook — wires sync into normal git workflow
-5. `pip install` packaging — `pyproject.toml`, CLI entry points
-6. `README.md` — lead with before/after token numbers
-
----
-
-## CLI Commands to Expose (after pip install)
+The third path means **no API key is required** when running inside a Claude Code session.
 
 ```bash
-aicontext init          # one-time setup for a repo
-aicontext task "..."    # populate CURRENT_TASK.md before a session
-aicontext sync          # update ARCHITECTURE.md after a session
-aicontext status        # show what's in .ai-context/ and when last updated
+# Examples
+export AICONTEXT_MODEL="gemini/gemini-2.5-flash"   # litellm → Google
+export AICONTEXT_MODEL="openai/gpt-4o-mini"         # litellm → OpenAI
+export AICONTEXT_MODEL="ollama/mistral"              # litellm → local Ollama
+export AICONTEXT_MODEL="claude-haiku-4-5"            # Anthropic SDK
+# (unset) → claude -p subprocess, zero config
+```
+
+---
+
+## Two-Tier Model Strategy
+
+Use cheap models for all cram maintenance. Reserve expensive models for actual coding.
+
+| Task | Recommended model | Cost |
+|---|---|---|
+| `cram init`, `cram task`, `cram sync` | Gemini Flash / Haiku | ~$0.001/call |
+| Actual coding sessions | Sonnet / GPT-4o | Pay only for real work |
+
+---
+
+## Cross-Platform Tray App
+
+Replaces the Mac-only `menubar.py` (rumps). Works on macOS, Windows, and Linux.
+
+### Framework decision
+
+| Framework | Mac | Windows | Linux | Notes |
+|---|---|---|---|---|
+| **pystray + pywebview** | ✓ | ✓ | ✓ | **Pick this** — pure Python, pip install, HTML popup UI |
+| rumps | ✓ | ✗ | ✗ | Current impl — Mac only, replace |
+| toga | ✓ | ✓ | partial | Heavier dependency |
+| tauri | ✓ | ✓ | ✓ | Best quality but requires Rust + JS — overkill for v1 |
+
+### Install
+
+```bash
+pip install 'cram-ai[tray]'   # installs pystray pillow pywebview
+cram-menu                      # or: cram menu
+```
+
+### Architecture
+
+```
+cram/
+  tray.py          ← replaces menubar.py
+    pystray         → system tray icon + right-click menu (all 3 platforms)
+    pywebview       → floating HTML popup window (identical UI on all platforms)
+  tray_ui/
+    popup.html      ← popup UI (task input + metrics + actions)
+    popup.css       ← styling using CSS variables
+    popup.js        ← calls cram CLI via fetch() to local Flask/http server
+  tray_server.py   ← tiny local HTTP server (Flask or http.server)
+                      bridges pywebview JS ↔ cram CLI subprocesses
+```
+
+### Popup UI — three states
+
+**State 1 — Fresh (green)**
+```
+┌─────────────────────────────┐
+│ 🧠 cram-ai      ● fresh     │
+│ ─────────────────────────── │
+│  2.1M tokens saved  $6.30   │
+│ ─────────────────────────── │
+│ Current task                │
+│ [what are you building?  ]  │
+│ [         Cram it         ] │
+│ ─────────────────────────── │
+│ ↺ Sync context              │
+│ 📁 Open .cram-ai-context/   │
+│ ⏻  Quit                     │
+└─────────────────────────────┘
+```
+
+**State 2 — Stale (amber)**
+- Status badge shows "3d old" in amber
+- Metrics still visible
+- Sync context action highlighted
+
+**State 3 — Not initialised (red)**
+- Status badge shows "not init" in red
+- Task input disabled, placeholder: "run cram init first"
+- Primary action becomes "Run cram init"
+- Metrics show "—"
+
+### How pywebview bridges to CLI
+
+```python
+# tray_server.py — tiny local server
+from flask import Flask, request, jsonify
+import subprocess
+
+app = Flask(__name__)
+
+@app.route('/task', methods=['POST'])
+def run_task():
+    description = request.json['description']
+    target = request.json.get('target', 'all')
+    result = subprocess.run(
+        ['cram', 'task', description, '--target', target],
+        capture_output=True, text=True
+    )
+    return jsonify({'success': result.returncode == 0, 'output': result.stdout})
+
+@app.route('/sync', methods=['POST'])
+def run_sync():
+    result = subprocess.run(['cram', 'sync'], capture_output=True, text=True)
+    return jsonify({'success': result.returncode == 0})
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    result = subprocess.run(
+        ['cram', 'status', '--json'],
+        capture_output=True, text=True
+    )
+    return jsonify({'status': result.stdout})
+```
+
+```python
+# tray.py — pystray entry point
+import pystray
+from PIL import Image
+import threading
+import webview
+from cram.tray_server import app as flask_app
+
+def start_server():
+    flask_app.run(port=49155, debug=False)
+
+def open_popup(icon, item):
+    webview.create_window(
+        'cram-ai',
+        url='http://localhost:49155/popup',
+        width=260, height=380,
+        frameless=True,
+        on_top=True
+    )
+    webview.start()
+
+def build_tray():
+    icon_img = Image.open('cram/tray_ui/icon.png')
+    menu = pystray.Menu(
+        pystray.MenuItem('Open', open_popup, default=True),
+        pystray.MenuItem('Sync context', lambda: subprocess.run(['cram', 'sync'])),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem('Quit', lambda: icon.stop())
+    )
+    icon = pystray.Icon('cram-ai', icon_img, 'cram-ai', menu)
+    threading.Thread(target=start_server, daemon=True).start()
+    icon.run()
+```
+
+### Linux caveat
+
+Linux tray support varies by desktop environment:
+- GNOME: requires AppIndicator extension (common on Ubuntu)
+- KDE, XFCE, i3: works natively
+- Document in README: "Linux tray requires a system tray — see setup notes"
+
+### Packaging as standalone app
+
+```bash
+# Mac → .app
+pip install py2app
+py2app setup.py       # dist/cram-ai.app
+
+# Windows → .exe
+pip install pyinstaller
+pyinstaller --onefile --windowed cram/tray.py
+
+# Linux → AppImage (optional, v2)
 ```
 
 ---
 
 ## Environment Variables
 
-```bash
-ANTHROPIC_API_KEY=...               # required
-AICONTEXT_MODEL=claude-haiku-4-5-20251001   # default, overridable
-AICONTEXT_MAX_FILES=5               # max files inlined in CURRENT_TASK.md
-AICONTEXT_MAX_LINES=300             # max lines per context file
+| Variable | Default | Description |
+|---|---|---|
+| `AICONTEXT_MODEL` | `''` (uses claude -p) | Model to use for cram's own calls |
+| `ANTHROPIC_API_KEY` | — | Optional when inside Claude Code session |
+| `AICONTEXT_MAX_FILES` | `5` | Max files inlined into CURRENT_TASK.md |
+| `AICONTEXT_MAX_LINES` | `300` | Max lines per file when inlining |
+
+---
+
+## Session Protocol (Document in README)
+
+1. Run `cram task "..." --target <tool>` before opening your AI extension
+2. The tool auto-loads `.cram-ai-context/CURRENT_TASK.md` context — no hunting
+3. Hard session boundary: end session when the feature works, not when everything feels done
+4. Same file + same concern = stay in session. Different file or concern = new session
+5. `cram sync` fires automatically via git hook after every commit
+
+---
+
+## Documentation
+
+HTML docs page: `/Users/vishbay/SideQuests/cram-ai.html`
+- Dark cosmic theme (pink/purple/cyan gradient)
+- Sections: overview, how it works, install, CLI commands, daily workflow,
+  saving cache writes (token flow viz + two-tier strategy + 6-step protocol),
+  model providers, session rules, env vars, benchmark, extensions
+- Pure HTML/CSS, no dependencies
+
+---
+
+## Context Engineering Positioning
+
+Andrej Karpathy (June 2025):
+> "Context engineering is the delicate art and science of filling the context window
+> with just the right information for the next step."
+
+cram is a context engineering tool for local codebases. It implements this as a practical
+CLI — automatically selecting the right 3–5 files from thousands, keeping context lean,
+sessions focused, costs low.
+
+---
+
+## Agentic Workflow Integration
+
+In single developer sessions, orientation cost is a one-time hit per session.
+In agentic workflows it multiplies — every agent call starts a fresh context window,
+paying the orientation tax independently. A 10-step agentic task = 10 separate
+orientation costs. cram as agent infrastructure reduces this to a flat ~7,000 token
+cost per call regardless of repo size.
+
+### Why agentic workflows make the problem worse
+
+66% of developers cite AI solutions that are "close but not quite right" as their biggest frustration. The best agents minimise that gap through better codebase context. cram solves context quality before the agent starts — not after.
+
+Code duplication has risen 4x with AI adoption. Dev teams juggling six or more tools report shipping confidence of just 28%. This is not a tools problem — it's a context problem. cram addresses this directly by maintaining accurate, shared architectural context.
+
+### Three integration patterns
+
+**Pattern 1 — Pre-flight context injection**
+Run cram before spawning any coding agent. The agent reads `.cram-ai-context/CURRENT_TASK.md`
+instead of indexing the repo itself:
+
+```python
+import subprocess
+from cram import prepare_context  # Python SDK (v2)
+
+# Before any agent call
+subprocess.run(['cram', 'task', agent_task, '--target', 'all'])
+# or with SDK:
+context = prepare_context(task=agent_task, repo_path='.')
+agent.run(system_context=context)
+```
+
+Works with: LangChain, AutoGen, CrewAI, Claude Code SDK, any framework.
+
+**Pattern 2 — Multi-agent context routing**
+Each sub-agent receives only the context relevant to its role.
+cram acts as a context router between the orchestrator and sub-agents:
+
+```
+Orchestrator: "add rate limiting to the REST API"
+       ↓ cram identifies: routes/api.js, middleware/auth.js, config/limits.js
+       ↓
+  Agent A (code writer)  → routes/api.js + middleware only
+  Agent B (test writer)  → existing test files only
+  Agent C (doc updater)  → README + API docs only
+```
+
+Token cost stays flat regardless of how many agents run in parallel.
+
+**Pattern 3 — Context compaction between steps**
+Long agentic runs accumulate context fast (turn 10 costs ~7x turn 1).
+cram sync after each step resets context to a compact baseline:
+
+```python
+def on_agent_step_complete(step_output):
+    subprocess.run(['cram', 'sync', '--from-output', step_output])
+    # next step reads fresh compact ARCHITECTURE.md
+    # instead of full accumulated history
+```
+
+### Agentic savings at scale
+
+| Scenario | Without cram | With cram |
+|---|---|---|
+| Single dev session | $1.57 | $0.027 |
+| 10-step agentic task | $15.70 | $0.27 |
+| 100-step autonomous run | $157.00 | $2.70 |
+| Team of 5, 100 sessions/month | $785.00 | $13.50 |
+
+---
+
+## MCP Server (V2)
+
+The Model Context Protocol, introduced by Anthropic in late 2024, has become a standard for agent communication. MCP tools for planning, memorialising conversations, and ingesting user files mitigate context limitations and hallucination risks.
+
+Exposing cram as an MCP server means any MCP-compatible agent (Claude, Cursor, Windsurf,
+Codex) can call cram's context engineering natively — zero integration code required.
+
+```json
+{
+  "name": "cram_prepare_context",
+  "description": "Find and prepare relevant files for a coding task. Returns CURRENT_TASK.md content with inlined file contents.",
+  "parameters": {
+    "task": { "type": "string", "description": "What the agent is trying to build or fix" },
+    "repo_path": { "type": "string", "description": "Path to the repo root" },
+    "max_files": { "type": "integer", "default": 5 }
+  }
+}
+```
+
+```json
+{
+  "name": "cram_sync",
+  "description": "Update ARCHITECTURE.md after code changes. Call after completing a task.",
+  "parameters": {
+    "repo_path": { "type": "string" }
+  }
+}
+```
+
+### MCP server architecture
+
+```python
+# cram/mcp_server.py
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from cram.find_context import find_relevant_files, populate_current_task
+from cram.sync_context import update_architecture_md
+
+server = Server("cram-ai")
+
+@server.call_tool()
+async def prepare_context(task: str, repo_path: str = ".") -> str:
+    files = find_relevant_files(task, repo_path)
+    return populate_current_task(task, files, repo_path)
+
+@server.call_tool()
+async def sync_context(repo_path: str = ".") -> str:
+    return update_architecture_md(repo_path)
+
+async def main():
+    async with stdio_server() as (read, write):
+        await server.run(read, write)
+```
+
+Add to Claude Code, Cursor, or any MCP client config:
+```json
+{
+  "mcpServers": {
+    "cram-ai": {
+      "command": "cram-mcp",
+      "args": []
+    }
+  }
+}
 ```
 
 ---
 
-## GitHub Repo Launch Checklist
+## Python SDK (V2)
 
-- [ ] Before/after token cost numbers in README (real data from Vish's project)
-- [ ] Quick start: install + first command under 5 minutes
-- [ ] Works with any VS Code AI extension (not tied to one tool)
-- [ ] Post on r/ClaudeAI, r/cursor, r/LocalLLaMA on launch
-- [ ] Write dev.to post: "How I cut AI coding token costs by X%"
-- [ ] VS Code marketplace extension as v2 goal
-
----
-
-*Generated from conversation on June 5, 2026.*
-*Do not give Claude Code this file and then ask it to read the whole repo.*
-*Start with: "Read PROJECT_CONTEXT.md, then let's build init.py first."*
-
----
-
-## V1 Workflow Fixes (Critical — Do Before Launch)
-
-### Fix 1 — Remove CLI friction from daily workflow (CRITICAL)
-Current flow requires developer to run `aicontext task "..."` in terminal before
-opening VS Code extension. This breaks natural coding flow and won't be adopted.
-
-**Solution: File watcher on CURRENT_TASK.md**
-- Developer edits CURRENT_TASK.md directly in VS Code (describe task in plain text)
-- File watcher detects save → auto-runs find_context → inlines relevant files
-- No terminal context switching required
-- Add to `init.py` as a background watcher process:
+Allows cram to be imported directly into agent orchestration code
+without subprocess calls. Cleaner integration for LangChain, AutoGen, CrewAI.
 
 ```python
-# watcher.py — runs in background after init
+# Public SDK surface
+from cram import prepare_context, sync_context, get_status
+
+# Prepare context for a task
+context = prepare_context(
+    task="add rate limiting to the API",
+    repo_path=".",
+    max_files=5,
+    model="gemini/gemini-2.5-flash"  # optional override
+)
+# Returns: { "task": str, "files": list[str], "content": str }
+
+# Sync after changes
+sync_context(repo_path=".")
+
+# Check context health
+status = get_status(repo_path=".")
+# Returns: { "fresh": bool, "days_old": int, "tokens_saved": int }
+```
+
+```python
+# LangChain integration example
+from cram import prepare_context
+from langchain.agents import AgentExecutor
+
+def run_coding_agent(task: str):
+    ctx = prepare_context(task=task)
+    agent = build_agent(system_prompt=ctx['content'])
+    return AgentExecutor(agent=agent).invoke({"input": task})
+```
+
+---
+
+## Additional Features (Research-Backed)
+
+### 1. Incremental context updates (not full regeneration)
+The ACE paper (Stanford/SambaNova, October 2025) demonstrates that incremental updates reduce drift and latency by up to 86% compared to context regeneration strategies. Incremental updates preserve accumulated accuracy and keep the change set reviewable.
+
+Current `cram sync` regenerates ARCHITECTURE.md from scratch. V2 should diff and patch:
+```bash
+cram sync --incremental   # only update sections that changed, not full regen
+```
+
+### 2. Context coverage gaps detection
+Finding gaps requires a structured walk through the technology stack — "does our context file cover how we use X?" for each significant dependency. A context-evaluator tool can automate this by scanning the repository and surfacing coverage gaps.
+
+```bash
+cram audit   # scans repo vs ARCHITECTURE.md, reports what's missing or stale
+             # output: "12 new files not in ARCHITECTURE.md, 3 deleted files still referenced"
+```
+
+### 3. Team shared context (`.cram-ai-context/` in git)
+Currently CURRENT_TASK.md is gitignored (per-developer). ARCHITECTURE.md and
+DECISIONS.md should be committed and shared — the orientation cost is paid once
+and benefits the whole team. Add a `cram team` command:
+
+```bash
+cram team init    # marks ARCHITECTURE.md + DECISIONS.md for git tracking
+cram team sync    # pulls latest shared context before starting work
+```
+
+Enterprise value: a team of 5 sharing context = 5x the savings with 1x the maintenance.
+
+### 4. Session cost tracking (per repo, persistent)
+Currently `cram status` shows staleness only. Add a persistent SQLite log of
+estimated savings per session, surfaced in the tray app and status command:
+
+```bash
+cram status
+# Context: fresh ✓
+# Sessions logged: 47
+# Tokens saved (estimated): 18.2M
+# Cost saved (estimated): $54.60 @ Sonnet rates
+# vs baseline: 418k tokens/session on this repo
+```
+
+SQLite schema:
+```sql
+CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  repo_path TEXT,
+  task TEXT,
+  context_tokens INTEGER,
+  baseline_tokens INTEGER,
+  model TEXT,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 5. `--manual` flag for enterprise users (no API key)
+Many enterprise developers cannot use personal API keys (internal gateway only).
+cram must work without one for the largest segment of the target market.
+
+```bash
+cram init --manual   # creates folder structure + empty templates
+                     # prints: "Populate ARCHITECTURE.md manually or paste into Gemma/ChatGPT"
+cram sync --manual   # prints git diff formatted for manual paste into any AI chat
+```
+
+### 6. Stack-aware skill generation
+Detect tech stack during init, generate specific DECISIONS.md and skills:
+
+```python
+STACK_DETECTORS = {
+    'vue':       lambda pkg: 'vue' in pkg.get('dependencies', {}),
+    'react':     lambda pkg: 'react' in pkg.get('dependencies', {}),
+    'nextjs':    lambda pkg: 'next' in pkg.get('dependencies', {}),
+    'streamlit': lambda reqs: 'streamlit' in reqs,
+    'fastapi':   lambda reqs: 'fastapi' in reqs,
+    'django':    lambda reqs: 'django' in reqs,
+    'nestjs':    lambda pkg: '@nestjs/core' in pkg.get('dependencies', {}),
+}
+```
+
+Output: stack-specific `skills/new-component.md`, `skills/fix-bug.md`, etc.
+Vue gets Composition API rules. FastAPI gets Pydantic model conventions. etc.
+
+### 7. File watcher — zero-friction task prep
+`watchdog` monitors CURRENT_TASK.md for saves. Developer edits the task description
+and saves — cram auto-populates relevant files without running any command.
+
+```bash
+cram watch   # starts background watcher, exits cleanly on Ctrl+C
+             # or runs automatically when tray app is open
+```
+
+```python
+# watcher.py
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from cram.find_context import auto_populate_on_save
 
 class TaskFileHandler(FileSystemEventHandler):
     def on_modified(self, event):
-        if event.src_path.endswith("CURRENT_TASK.md"):
-            run_find_context()  # auto-populate relevant files on save
-```
-
-CURRENT_TASK.md template after fix:
-```markdown
-## Task
-<!-- Describe your task here and save — files will auto-populate below -->
-
-## Relevant Files
-<!-- Auto-populated by aicontext watcher — do not edit manually -->
+        if 'CURRENT_TASK.md' in event.src_path:
+            auto_populate_on_save(event.src_path)
 ```
 
 ---
 
-### Fix 2 — Make API key optional (CRITICAL for enterprise users)
-Many target users (enterprise devs on internal gateways) cannot get personal
-Anthropic API keys. Tool must work without one.
+## What's Built (V1 — Shipped)
 
-**Solution: Add --manual flag to init and sync**
-```bash
-aicontext init --manual
-# Creates .ai-context/ folder and all template files
-# Skips AI-generated ARCHITECTURE.md
-# Prints instructions for populating manually or via Gemma/ChatGPT
-```
-
-When --manual flag used, print:
-```
-✓ Created .ai-context/ folder structure
-✓ Templates ready for manual population
-
-To populate ARCHITECTURE.md:
-  Option A: Paste your repo structure into Gemma/ChatGPT (free)
-            and ask: "Generate an ARCHITECTURE.md from this structure"
-  Option B: Fill in manually — see template comments for guidance
-
-No API key required for basic usage.
-```
+- [x] `cram init` — repo scan, ARCHITECTURE.md generation, hook install
+- [x] `cram task` — file discovery, CURRENT_TASK.md population, `--target` flag
+- [x] `cram sync` — git diff → ARCHITECTURE.md update
+- [x] `cram status` — freshness display, staleness warning, `get_status_dict()`
+- [x] `cram hook` — install/uninstall git post-commit hook
+- [x] `targets.py` — cram-owned instruction files for cursor/claude/copilot/codex/windsurf
+- [x] `tray.py` — cross-platform tray app (pystray + pywebview)
+  - Native OS dropdown as default (live status, Set task… native dialog, Sync)
+  - "Open popup" opt-in → full 280px HTML window
+  - Popup: minimize to header strip / expand, ? workflow guide panel, task input, metrics
+- [x] `find_git_root()` in utils.py — all commands auto-detect git root by walking up from cwd; works from any subdirectory
+- [x] `tray_server.py` — local Flask bridge on port 49155
+- [x] `tray_ui/` — popup.html + popup.css + popup.js
+- [x] `pip install 'cram-ai[tray]'` extra — pystray + pillow + pywebview + flask
+- [x] Model routing: litellm / Anthropic SDK / claude -p subprocess
+- [x] `pyproject.toml` — pip installable as `cram-ai`, CLI entry `cram` + `cram-menu`
+- [x] 72 tests, all passing
+- [x] README with benchmark numbers
+- [x] HTML docs page (dark cosmic theme)
 
 ---
 
-### Fix 3 — Init output must be readable and actionable
-Current init runs silently. Developer has no confidence it worked correctly.
+## What's Next
 
-**Solution: Structured init output**
-```
-aicontext init output:
+### Next sprint — highest friction, highest value
 
-✓ Scanned 2,151 files (ignored 1,847 in node_modules/dist/build)
-✓ ARCHITECTURE.md — 52 lines, detected: Vue 3, Pinia, Axios
-✓ DECISIONS.md — ready for your notes
-✓ CURRENT_TASK.md — edit this before each session
-✓ Skills generated: new-component.md, fix-bug.md, refactor.md (Vue stack)
-✓ Git hook installed — context syncs automatically after commits
-
-Top files identified — does this look right?
-  src/components/Auth/LoginForm.vue
-  src/store/auth.js
-  src/api/client.js
-  src/router/index.js
-  src/composables/useAuth.js
-
-Review .ai-context/ARCHITECTURE.md before your first session.
-Next: Edit CURRENT_TASK.md and describe what you're building.
-```
+| Priority | Item | Why now |
+|---|---|---|
+| 1 | **pipx install** | Current venv story is too complex; pipx is one line, handles PATH automatically |
+| 2 | **Session cost tracking** (SQLite) | Shows users the value cram is delivering; drives retention |
+| 3 | **MCP server** | Unlocks every agentic workflow without any integration code |
+| 4 | **cram audit** | Context quality degrades silently; audit surfaces drift before it causes bad codegen |
+| 5 | **`--manual` flag** | Largest enterprise segment can't use API keys; this unblocks them |
 
 ---
 
-### Fix 4 — Stack detection for relevant skills (HIGH)
-Generic skills get ignored. Skills must match the developer's actual stack.
+### V1.5 — Install & packaging (highest friction point right now)
+- [ ] **`pipx` as canonical install path** — `brew install pipx && pipx install 'cram-ai[tray]'`; document in README + HTML docs; `cram-menu` on PATH with no venv management
+- [ ] **Homebrew tap** (`homebrew-cram-ai`) — `brew install vishbay/cram-ai/cram-ai`; write Formula/cram-ai.rb; requires PyPI publish first
+- [ ] **PyPI publish** — `twine upload`; set version to 0.1.0; prerequisite for Homebrew
+- [ ] **Mac .app bundle** — `py2app` wrapping `cram-menu`; drag-to-Applications; auto-launch on login option
+- [ ] **Windows .exe** — `PyInstaller --onefile --windowed cram/tray.py`
 
-**Solution: Detect stack during init**
-```python
-def detect_stack(repo_path: str) -> list[str]:
-    stacks = []
-    # Check package.json
-    pkg = load_json(f"{repo_path}/package.json")
-    if "vue" in pkg.get("dependencies", {}): stacks.append("vue")
-    if "react" in pkg.get("dependencies", {}): stacks.append("react")
-    if "next" in pkg.get("dependencies", {}): stacks.append("nextjs")
-    # Check requirements.txt
-    reqs = read_file(f"{repo_path}/requirements.txt")
-    if "streamlit" in reqs: stacks.append("streamlit")
-    if "fastapi" in reqs: stacks.append("fastapi")
-    if "django" in reqs: stacks.append("django")
-    return stacks
-```
+### V1.5 — Tray app polish
+- [ ] **Popup position** — anchor popup below tray icon (not center-screen); requires getting icon position from pystray
+- [ ] **Auto-start on login** — macOS LaunchAgent plist; Windows registry run key
+- [ ] **Repo picker** — if launched outside a git repo, show a folder-chooser dialog
+- [ ] **Target remembered** — persist last-used `--target` selection in config.toml; restore on popup open
 
-Generate stack-specific skills:
-- Vue detected → new-component.md uses Composition API, Pinia conventions
-- React detected → new-component.md uses hooks, prop-types/TypeScript
-- Streamlit detected → new-page.md uses st.session_state conventions
-- FastAPI detected → new-endpoint.md uses Pydantic models, dependency injection
+### V1.5 — CLI improvements
+- [ ] **Session cost tracking** — SQLite log per repo; `cram status` shows cumulative savings ("18.2M tokens saved, $54.60"); surfaced in popup metrics
+- [ ] **`cram audit`** — scan repo vs ARCHITECTURE.md; report new files not indexed, deleted files still referenced
+- [ ] **`--manual` flag** — `cram init --manual` creates empty templates; `cram sync --manual` prints formatted git diff for paste into any AI chat (no API key required)
+- [ ] **Stack detection** — detect Vue/React/FastAPI/Django/NestJS during init; generate stack-specific DECISIONS.md + skills templates
+- [ ] **`cram watch`** — `watchdog` monitors CURRENT_TASK.md; auto-populates relevant files on save; runs in background when tray app is open
+- [ ] **`cram sync --incremental`** — diff-patch ARCHITECTURE.md instead of full regen (86% less drift per ACE paper)
+- [ ] **`cram team init/sync`** — commit ARCHITECTURE.md + DECISIONS.md to git; `cram team sync` pulls shared context before starting work
 
----
+### V2 — MCP server (highest leverage for agentic workflows)
+- [ ] **`cram-mcp`** entry point — exposes `cram_prepare_context` and `cram_sync` as MCP tools
+- [ ] Works with Claude Code, Cursor, Windsurf, Codex — zero integration code
+- [ ] `pip install 'cram-ai[mcp]'` extra
 
-### Fix 5 — Surface stale context via status command (MEDIUM)
-Git hook only helps disciplined committers. Most devs code for hours before committing.
-Stale ARCHITECTURE.md silently causes bad sessions.
+### V2 — Python SDK
+- [ ] `from cram import prepare_context, sync_context, get_status`
+- [ ] LangChain / AutoGen / CrewAI integration examples
+- [ ] `cram sync --from-output` for context compaction between agentic steps
 
-**Solution: aicontext status with staleness warning**
-```bash
-aicontext status
-
-.ai-context health:
-  ARCHITECTURE.md  — updated 3 days ago  ⚠️  consider running aicontext sync
-  DECISIONS.md     — updated 12 days ago ⚠️
-  CURRENT_TASK.md  — updated today       ✓
-  Watcher          — running             ✓
-
-Estimated savings (since init, 47 sessions):
-  Cache writes avoided: ~18.2M tokens
-  Estimated cost saved: ~$54.60
-  vs baseline (418k tokens/session on this repo size)
-```
-
-The savings counter makes value tangible every time they check status.
-This is the most important retention mechanic — shows ROI over time.
+### V2 — VS Code extension
+- [ ] Status bar dot (green/amber/red)
+- [ ] CURRENT_TASK.md sidebar panel with inline edit
+- [ ] Auto-sync on file save; one-click init from command palette
+- [ ] Publish to VS Code Marketplace
 
 ---
 
-## V2 Roadmap — VS Code Extension (Post-Launch)
+## Differentiator
 
-Once v1 CLI gains traction, a VS Code extension removes all remaining friction.
-This is the natural evolution and where sustained adoption lives.
+- **CLAUDE.md / AGENTS.md** — manual, no tooling
+- **Cursor .cursorrules** — extension-specific, no file discovery
+- **Continue.dev context providers** — complex setup
+- **RAG tools (Pinecone, Weaviate)** — infrastructure-heavy, overkill for one dev
 
-### What the extension adds
-
-**Status bar integration**
-- Shows `.ai-context` health in VS Code bottom bar at all times
-- Green dot = context fresh, yellow = stale, red = not initialised
-- Click to run `aicontext sync` or `aicontext status` without leaving VS Code
-
-**CURRENT_TASK.md sidebar panel**
-- Dedicated sidebar panel showing current task and inlined files
-- Edit task description directly in panel → auto-triggers find_context
-- No need to open/edit the .md file manually
-
-**Auto-sync on file save**
-- Detects when source files change significantly
-- Prompts: "Files changed since last sync — update ARCHITECTURE.md? [Yes/Later]"
-- Removes the git hook dependency entirely
-
-**Session cost estimator**
-- Before starting a session shows: "Estimated context size: 7,239 tokens (~$0.027)"
-- After session shows actual vs estimated — builds trust over time
-
-**One-click init**
-- Command palette: `aicontext: Initialize repository`
-- Runs init, shows output in VS Code output panel
-- No terminal required
-
-### Extension tech stack
-```
-vscode-aicontext/
-  src/
-    extension.ts        ← activation, command registration
-    statusBar.ts        ← health indicator in bottom bar
-    sidebarPanel.ts     ← CURRENT_TASK.md webview panel
-    watcher.ts          ← file change detection
-    contextEngine.ts    ← wraps Python CLI calls via child_process
-  package.json          ← VS Code extension manifest
-```
-
-Language: TypeScript (VS Code extension standard)
-Calls existing Python CLI under the hood — no logic duplication
-Publish to VS Code Marketplace as `aicontext`
+cram: **local, zero infrastructure, works in 30 seconds, any extension, any model.**
 
 ---
 
-## Updated Build Order
-
-### V1 — CLI (build now with Claude Code)
-1. `init.py` — with stack detection + readable output
-2. `find_context.py` — core file discovery logic
-3. `watcher.py` — file watcher on CURRENT_TASK.md (replaces CLI task step)
-4. `sync_context.py` — post-session update
-5. `status.py` — staleness check + savings counter
-6. `--manual` flag on init and sync
-7. `post-commit` git hook
-8. `pyproject.toml` — pip installable, CLI entry points
-9. `tests/` — validation test suite + benchmark script
-10. `README.md` — benchmark numbers first, then quick start
-
-### V2 — VS Code Extension (after v1 traction)
-1. Status bar health indicator
-2. CURRENT_TASK.md sidebar panel
-3. Auto-sync on file save
-4. One-click init from command palette
-5. Session cost estimator
-6. Publish to VS Code Marketplace
-
----
-
-## Updated CLI Commands
-
-```bash
-aicontext init              # one-time setup, detects stack, generates skills
-aicontext init --manual     # setup without API key, manual ARCHITECTURE.md
-aicontext sync              # update ARCHITECTURE.md after coding session
-aicontext sync --manual     # print diff for manual update via Gemma
-aicontext status            # health check + staleness warnings + savings counter
-aicontext watch             # start file watcher on CURRENT_TASK.md (auto mode)
-```
-
-Note: `aicontext task "..."` kept for power users but no longer the primary flow.
-Primary flow is: edit CURRENT_TASK.md → save → watcher auto-populates files.
-
----
-
-## Context Engineering Positioning (for README and launch posts)
-
-Andrej Karpathy (June 2025, now at Anthropic):
-"Context engineering is the delicate art and science of filling the context window
-with just the right information for the next step. Too little or of the wrong form
-and the LLM doesn't have the right context for optimal performance. Too much or too
-irrelevant, and the LLM costs might go up, and performance might come down."
-
-aicontext is a context engineering tool for local codebases.
-It implements Karpathy's definition as a practical CLI — automatically selecting
-the right 3-5 files from thousands, keeping context lean, sessions focused, costs low.
-
-Benchmark (Hoppscotch — 2,151 files, 12-package monorepo):
-  Without aicontext: 418,697 tokens / $1.57 per session (cache write)
-  With aicontext:      7,239 tokens / $0.027 per session (cache write)
-  Subsequent sessions: 7,239 tokens / $0.002 per session (cache read)
-  Reduction: 98.3%
-
----
-
-*Updated: June 6, 2026*
-*Start Claude Code with: "Read PROJECT_CONTEXT.md, then let's build init.py first."*
-*Build one script at a time. Commit between scripts. Keep sessions under $5.*
+*Updated: June 6, 2026 — added agentic workflow integration (3 patterns), MCP server spec, Python SDK, 7 additional features (incremental sync, audit, team context, session tracking, manual flag, stack detection, file watcher), cross-platform tray app spec, and expanded roadmap.*
+*Start a new session with: "Read PROJECT_CONTEXT.md" — gives full current state.*
