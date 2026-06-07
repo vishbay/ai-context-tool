@@ -1,15 +1,17 @@
 """Pre-session file discovery: identifies relevant files and populates CURRENT_TASK.md."""
 
+from __future__ import annotations
 import os
 import re
 import sys
 
-from cram.utils import call_model
+from cram.utils import call_model, find_git_root as _find_git_root
+from cram import targets as _targets
 
 MAX_FILES = int(os.environ.get('AICONTEXT_MAX_FILES', '5'))
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 
-CONTEXT_DIR = '.ai-context'
+CONTEXT_DIR = '.cram-ai-context'
 
 
 def _read_context_file(filename: str) -> str:
@@ -83,10 +85,10 @@ def populate_current_task(task: str, files: list[str]) -> list[str]:
     return found
 
 
-def find_context(task: str) -> None:
+def find_context(task: str, target: str | None = None) -> None:
     if not os.path.isdir(CONTEXT_DIR):
         print(
-            f"Error: {CONTEXT_DIR}/ not found. Run `aicontext init` first.",
+            f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -120,15 +122,67 @@ def find_context(task: str) -> None:
         for f in missing:
             print(f"  {f}")
 
+    # Write to target tool's auto-loaded instruction file
+    if target:
+        with open(os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md')) as fh:
+            content = fh.read()
+        root = _find_git_root(os.getcwd())
+        print("\nContext auto-loaded into:")
+        if target == 'all':
+            written = _targets.write_to_all_detected(root, content)
+            for p in written:
+                print(f"  → {os.path.relpath(p)}")
+            if not written:
+                print("  (no known tool indicators found — try a specific --target)")
+        else:
+            path = _targets.write_to_target(root, target, content)
+            print(f"  → {os.path.relpath(path)}")
+
     print("\nReady. Start your coding session — CURRENT_TASK.md has everything inlined.")
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: aicontext task \"<task description>\"", file=sys.stderr)
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog='cram task',
+        description='Populate CURRENT_TASK.md before a coding session',
+    )
+    parser.add_argument('task', nargs='+', help='Task description')
+    parser.add_argument(
+        '--target',
+        choices=[*_targets.TARGET_FILES, 'all'],
+        default=None,
+        metavar='TARGET',
+        help=(
+            'Auto-load context into the tool\'s instruction file. '
+            f"Choices: {', '.join(_targets.TARGET_FILES)} | all. "
+            'Falls back to default_target in .cram-ai-context/config.toml.'
+        ),
+    )
+    parser.add_argument(
+        '--path',
+        default=None,
+        metavar='REPO_PATH',
+        help='Path to the repo root (default: auto-detected from cwd)',
+    )
+    args = parser.parse_args()
+
+    start = os.path.abspath(args.path) if args.path else os.getcwd()
+    root  = _find_git_root(start)
+
+    if not os.path.isdir(os.path.join(root, CONTEXT_DIR)):
+        print(
+            f"Error: {CONTEXT_DIR}/ not found in {root}.\n"
+            "  Run `cram init` first, or use --path to point at your repo:\n"
+            f"  cram task \"{' '.join(args.task)}\" --path /path/to/repo",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    task = ' '.join(sys.argv[1:])
-    find_context(task)
+
+    os.chdir(root)
+    task = ' '.join(args.task)
+    effective_target = args.target or _targets.load_default_target(root)
+    find_context(task, effective_target)
 
 
 if __name__ == '__main__':

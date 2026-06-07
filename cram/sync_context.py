@@ -9,7 +9,7 @@ from cram.utils import call_model, strip_code_fence
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 
-CONTEXT_DIR = '.ai-context'
+CONTEXT_DIR = '.cram-ai-context'
 
 
 def get_git_diff() -> str:
@@ -45,7 +45,7 @@ def sync(root: str = '.') -> None:
 
     if not os.path.isdir(context_dir):
         print(
-            f"Error: {CONTEXT_DIR}/ not found. Run `aicontext init` first.",
+            f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -71,7 +71,8 @@ def sync(root: str = '.') -> None:
 
 
 def main() -> None:
-    target = sys.argv[1] if len(sys.argv) > 1 else '.'
+    from cram.utils import find_git_root
+    target = find_git_root(sys.argv[1] if len(sys.argv) > 1 else '.')
     sync(target)
 
 

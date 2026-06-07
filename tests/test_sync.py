@@ -75,7 +75,7 @@ class TestSync:
             sync(str(tmp_path))
 
     def test_writes_updated_architecture(self, tmp_path):
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('# Old Arch')
 
@@ -88,7 +88,7 @@ class TestSync:
         assert '# New Arch' in content
 
     def test_reads_existing_architecture_as_context(self, tmp_path):
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('# Existing Context')
 
@@ -101,7 +101,7 @@ class TestSync:
         assert '# Existing Context' in prompt
 
     def test_handles_missing_architecture_gracefully(self, tmp_path):
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         # No ARCHITECTURE.md — should not crash
 
@@ -113,7 +113,7 @@ class TestSync:
         assert (ctx / 'ARCHITECTURE.md').read_text() == '# Fresh'
 
     def test_passes_structure_and_diff_to_model(self, tmp_path):
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('')
 

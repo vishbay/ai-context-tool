@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>cram-ai</title>
+  <link rel="stylesheet" href="/static/popup.css" />
+</head>
+<body>
+
+<div id="app" class="state-loading">
+
+  <!-- Header -->
+  <header id="header" onclick="cramExpandIfCompact()">
+    <span class="logo">⚡ cram-ai</span>
+    <span id="badge" class="badge">●</span>
+    <button class="icon-btn help-toggle" onclick="event.stopPropagation(); toggleHelp()" title="Workflow guide">?</button>
+    <button class="icon-btn minimize-btn"  onclick="event.stopPropagation(); cramMinimize()" title="Minimise">—</button>
+    <button class="icon-btn expand-btn"    onclick="event.stopPropagation(); cramExpand()"   title="Expand">↑</button>
+    <button class="icon-btn close-btn"     onclick="event.stopPropagation(); cramClose()"    title="Close">✕</button>
+  </header>
+
+  <!-- Repo selector -->
+  <div id="repo-bar" class="repo-bar collapsible">
+    <button class="repo-trigger" id="repo-trigger" onclick="toggleRepoDropdown()">
+      <span class="repo-icon">⬡</span>
+      <span id="repo-name">—</span>
+      <span id="repo-arrow" class="repo-arrow">▾</span>
+    </button>
+    <div id="repo-dropdown" class="repo-dropdown hidden">
+      <div id="recent-repos-list"></div>
+      <button class="repo-item repo-browse" onclick="cramBrowseRepo()">
+        📂 Browse for repo…
+      </button>
+    </div>
+  </div>
+
+  <!-- Contextual next-step hint -->
+  <div id="hint-bar" class="hint-bar collapsible"></div>
+
+  <!-- Metrics -->
+  <div class="metrics collapsible">
+    <div class="metric-row">
+      <div class="metric-block">
+        <div class="metric-value" id="savings-pct">—</div>
+        <div class="metric-label">saved</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="cost-saved">—</div>
+        <div class="metric-label">per session</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="cram-tokens">—</div>
+        <div class="metric-label">tokens</div>
+      </div>
+    </div>
+    <div class="metric-sub" id="last-task-line">last task: —</div>
+  </div>
+
+  <!-- Task input (shown when init'd) -->
+  <div id="task-section" class="collapsible">
+    <div class="section-label">What are you building?</div>
+    <textarea
+      id="task-input"
+      placeholder="e.g. add OAuth login flow"
+      rows="2"
+      onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))cramTask()"
+    ></textarea>
+    <div class="task-controls">
+      <select id="target-select" title="Auto-load target">
+        <option value="cursor">cursor</option>
+        <option value="claude">claude</option>
+        <option value="copilot">copilot</option>
+        <option value="codex">codex</option>
+        <option value="windsurf">windsurf</option>
+        <option value="all">all</option>
+      </select>
+      <button id="cram-btn" class="btn-primary" onclick="cramTask()">Cram it</button>
+    </div>
+  </div>
+
+  <!-- Not-initialised prompt -->
+  <div id="init-section" class="collapsible hidden">
+    <p class="init-msg">No <code>.cram-ai-context/</code> found.</p>
+    <button class="btn-primary wide" onclick="cramInit()">Run cram init</button>
+  </div>
+
+  <!-- Workflow guide (collapsed by default) -->
+  <div id="help-panel" class="help-panel collapsible hidden">
+    <div class="help-title">Workflow steps</div>
+    <ol class="help-steps">
+      <li><code>cram init</code> — one-time setup per repo</li>
+      <li>Set task above <em>before</em> opening your AI tool</li>
+      <li>AI extension auto-loads the context — no copying</li>
+      <li>One task per session; end at a feature boundary</li>
+      <li><code>cram sync</code> fires automatically on git commit</li>
+    </ol>
+    <div class="help-tip">⌘↵ to submit task · stale = run Sync</div>
+  </div>
+
+  <!-- Activity log — persists for the session -->
+  <div id="output" class="output collapsible hidden"></div>
+
+  <!-- Footer actions -->
+  <footer class="collapsible">
+    <button class="footer-btn" id="sync-btn" onclick="cramSync()" title="Sync ARCHITECTURE.md">
+      ↺ Sync
+    </button>
+    <button class="footer-btn" onclick="cramOpenFolder()" title="Open context folder">
+      📁 Open
+    </button>
+    <button class="footer-btn danger" onclick="cramQuit()" title="Quit cram-ai">
+      ⏻
+    </button>
+  </footer>
+
+</div>
+
+<script src="/static/popup.js"></script>
+</body>
+</html>

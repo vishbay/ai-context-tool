@@ -1,4 +1,4 @@
-"""One-time setup: scans a repo, generates initial .ai-context/ files via Haiku."""
+"""One-time setup: scans a repo, generates initial .cram-ai-context/ files via Haiku."""
 
 import os
 import sys
@@ -10,7 +10,7 @@ from cram.hooks import install_hook
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
     '.git', '.venv', 'venv', 'coverage', '.next',
-    '.ai-context',
+    '.cram-ai-context',
 }
 
 EXCLUDE_FILES = {
@@ -89,16 +89,16 @@ CURRENT_TASK_TEMPLATE = """\
 <!-- Replace with your task description -->
 
 ## Relevant Files
-<!-- Populated by `aicontext task "..."` -->
+<!-- Populated by `cram task "..."` -->
 """
 
 
 def init_repo(target: str = '.') -> None:
     root = os.path.abspath(target)
-    context_dir = os.path.join(root, '.ai-context')
+    context_dir = os.path.join(root, '.cram-ai-context')
 
     if os.path.exists(context_dir):
-        print(f".ai-context/ already exists at {context_dir}. Skipping.")
+        print(f".cram-ai-context/ already exists at {context_dir}. Skipping.")
         return
 
     print(f"Scanning {root} ...")
@@ -122,14 +122,15 @@ def init_repo(target: str = '.') -> None:
 
     install_hook(root)
 
-    print(f"\nDone. Created .ai-context/ with:")
+    print(f"\nDone. Created .cram-ai-context/ with:")
     for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']:
-        print(f"  .ai-context/{fname}")
-    print("\nNext: review ARCHITECTURE.md and run `aicontext task \"<your task>\"` before a coding session.")
+        print(f"  .cram-ai-context/{fname}")
+    print("\nNext: review ARCHITECTURE.md and run `cram task \"<your task>\"` before a coding session.")
 
 
 def main() -> None:
-    target = sys.argv[1] if len(sys.argv) > 1 else '.'
+    from cram.utils import find_git_root
+    target = find_git_root(sys.argv[1] if len(sys.argv) > 1 else '.')
     init_repo(target)
 
 

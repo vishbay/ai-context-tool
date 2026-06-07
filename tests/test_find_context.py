@@ -125,7 +125,7 @@ class TestFindRelevantFiles:
 class TestPopulateCurrentTask:
     def test_inlines_existing_file_content(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         src = tmp_path / 'utils.py'
         src.write_text('def helper(): pass\n')
@@ -139,28 +139,28 @@ class TestPopulateCurrentTask:
 
     def test_notes_missing_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.ai-context').mkdir()
+        (tmp_path / '.cram-ai-context').mkdir()
 
         found = populate_current_task('task', ['ghost.py'])
 
         assert found == []
-        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
         assert 'ghost.py' in content
         assert 'not found' in content
 
     def test_uses_correct_code_fence_for_extension(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.ai-context').mkdir()
+        (tmp_path / '.cram-ai-context').mkdir()
         (tmp_path / 'app.ts').write_text('const x = 1;\n')
 
         populate_current_task('task', ['app.ts'])
 
-        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
         assert '```ts' in content
 
     def test_handles_mixed_existing_and_missing(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.ai-context').mkdir()
+        (tmp_path / '.cram-ai-context').mkdir()
         (tmp_path / 'real.py').write_text('# real\n')
 
         found = populate_current_task('task', ['real.py', 'fake.py'])
@@ -181,7 +181,7 @@ class TestFindContext:
 
     def test_warns_if_architecture_missing(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.ai-context').mkdir()
+        (tmp_path / '.cram-ai-context').mkdir()
         # No ARCHITECTURE.md created — should warn but not crash
 
         with patch('cram.find_context.call_model', return_value=''):
@@ -191,7 +191,7 @@ class TestFindContext:
 
     def test_full_flow_with_mocked_model(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        ctx = tmp_path / '.ai-context'
+        ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()
         (ctx / 'ARCHITECTURE.md').write_text('# Arch')
         (ctx / 'DECISIONS.md').write_text('# Dec')

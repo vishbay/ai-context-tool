@@ -1,4 +1,4 @@
-"""aicontext status — show .ai-context/ file freshness and repo sync state."""
+"""cram status — show .cram-ai-context/ file freshness and repo sync state."""
 
 from __future__ import annotations
 import os
@@ -6,7 +6,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-CONTEXT_DIR = '.ai-context'
+CONTEXT_DIR = '.cram-ai-context'
 CONTEXT_FILES = ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']
 
 
@@ -48,18 +48,53 @@ def _line_count(path: str) -> int:
         return 0
 
 
+def get_status_dict(root: str = '.') -> dict:
+    """Return structured status data for programmatic use (tray server, etc.)."""
+    root = os.path.abspath(root)
+    context_dir = os.path.join(root, CONTEXT_DIR)
+
+    if not os.path.isdir(context_dir):
+        return {'state': 'not-init', 'files': {}, 'last_commit_age': None}
+
+    last_commit = _last_commit_time()
+    now = datetime.now(tz=timezone.utc)
+    files: dict = {}
+    stale = False
+
+    for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md'):
+        fpath = os.path.join(context_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+        mtime = _mtime(fpath)
+        if mtime:
+            age_secs = int((now - mtime).total_seconds())
+            files[fname] = {
+                'age_secs':  age_secs,
+                'age_label': _age_label(mtime),
+                'lines':     _line_count(fpath),
+            }
+            if fname == 'ARCHITECTURE.md' and last_commit and last_commit > mtime:
+                stale = True
+
+    return {
+        'state':            'stale' if stale else 'fresh',
+        'files':            files,
+        'last_commit_age':  _age_label(last_commit) if last_commit else None,
+    }
+
+
 def show_status(root: str = '.') -> None:
     root = os.path.abspath(root)
     context_dir = os.path.join(root, CONTEXT_DIR)
 
     if not os.path.isdir(context_dir):
-        print(f"No .ai-context/ found in {root}.")
-        print("Run `aicontext init` to set it up.")
+        print(f"No .cram-ai-context/ found in {root}.")
+        print("Run `cram init` to set it up.")
         sys.exit(1)
 
     last_commit = _last_commit_time()
 
-    print(f".ai-context/  ({context_dir})")
+    print(f".cram-ai-context/  ({context_dir})")
     print()
 
     stale = False
@@ -85,13 +120,14 @@ def show_status(root: str = '.') -> None:
     if last_commit:
         print(f"Last commit : {_age_label(last_commit)}")
     if stale:
-        print("ARCHITECTURE.md is behind the latest commit. Run `aicontext sync` to update.")
+        print("ARCHITECTURE.md is behind the latest commit. Run `cram sync` to update.")
     else:
         print("Context is up to date.")
 
 
 def main() -> None:
-    target = sys.argv[1] if len(sys.argv) > 1 else '.'
+    from cram.utils import find_git_root
+    target = find_git_root(sys.argv[1] if len(sys.argv) > 1 else '.')
     show_status(target)
 
 

@@ -13,6 +13,22 @@ CLAUDE_BIN = os.environ.get('CLAUDE_CODE_EXECPATH', 'claude')
 #   unset           → falls back to claude -p with 'haiku'
 
 
+def find_git_root(path: str = '.') -> str:
+    """Walk up from path until a .git directory is found.
+
+    Returns the git root directory. Falls back to the resolved path if no .git
+    is found (e.g. the user is outside any repo).
+    """
+    current = os.path.abspath(path)
+    while True:
+        if os.path.isdir(os.path.join(current, '.git')):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:          # reached filesystem root
+            return os.path.abspath(path)
+        current = parent
+
+
 def strip_code_fence(text: str) -> str:
     """Remove outer markdown code fences that models sometimes add."""
     lines = text.strip().splitlines()

@@ -7,7 +7,7 @@ import sys
 
 HOOK_SCRIPT = """\
 #!/bin/sh
-# Installed by cram-ai — keeps .ai-context/ARCHITECTURE.md fresh
+# Installed by cram-ai — keeps .cram-ai-context/ARCHITECTURE.md fresh
 if command -v cram >/dev/null 2>&1; then
     cram sync
 elif command -v python3 >/dev/null 2>&1; then
@@ -85,10 +85,12 @@ def main() -> None:
     parser.add_argument('path', nargs='?', default='.')
     args = parser.parse_args()
 
+    from cram.utils import find_git_root
+    path = find_git_root(args.path)
     if args.action == 'uninstall':
-        uninstall_hook(args.path)
+        uninstall_hook(path)
     else:
-        install_hook(args.path)
+        install_hook(path)
 
 
 if __name__ == '__main__':
