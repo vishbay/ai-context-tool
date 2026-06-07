@@ -234,6 +234,12 @@ async function fetchStatus() {
     const res  = await fetch('/status');
     const data = await res.json();
 
+    if (data.branch_alert) {
+      showBranchAlert(data.branch_alert);
+    } else {
+      hideBranchAlert();
+    }
+
     if (data.state === 'not-init') {
       _lastState = 'not-init';
       setState('not-init');
@@ -254,6 +260,23 @@ async function fetchStatus() {
     setState('loading');
     setBadge('…');
   }
+}
+
+function showBranchAlert(branch) {
+  const el = document.getElementById('branch-alert');
+  document.getElementById('branch-alert-text').textContent =
+    `⎇ Switched to ${branch} — set your task`;
+  el.classList.remove('hidden');
+  document.getElementById('task-input')?.focus();
+}
+
+function hideBranchAlert() {
+  document.getElementById('branch-alert').classList.add('hidden');
+}
+
+async function dismissBranchAlert() {
+  hideBranchAlert();
+  fetch('/dismiss-branch-alert', { method: 'POST' }).catch(() => {});
 }
 
 async function fetchMetrics() {

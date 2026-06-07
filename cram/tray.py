@@ -328,7 +328,19 @@ def main() -> None:
         **pos_kwargs,
     )
 
-    # 4. webview.start() owns the main thread (required on macOS/Win)
+    # 4. Register show callback so the tray server can open the popup from a hook
+    def _show_popup_from_hook():
+        if _win[0]:
+            _win[0].show()
+            x, y = _popup_position()
+            if x is not None:
+                try:
+                    _win[0].move(x, y)
+                except Exception:
+                    pass
+    tray_server.register_show_callback(_show_popup_from_hook)
+
+    # 5. webview.start() owns the main thread (required on macOS/Win)
     webview.start(debug=False)
 
     # 5. Webview exited — stop tray icon

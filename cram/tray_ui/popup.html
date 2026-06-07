@@ -20,6 +20,12 @@
     <button class="icon-btn close-btn"     onclick="event.stopPropagation(); cramClose()"    title="Close">✕</button>
   </header>
 
+  <!-- Branch-switch alert -->
+  <div id="branch-alert" class="branch-alert hidden">
+    <span id="branch-alert-text"></span>
+    <button class="branch-alert-dismiss" onclick="dismissBranchAlert()" title="Dismiss">✕</button>
+  </div>
+
   <!-- Repo selector -->
   <div id="repo-bar" class="repo-bar collapsible">
     <button class="repo-trigger" id="repo-trigger" onclick="toggleRepoDropdown()">

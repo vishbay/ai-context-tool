@@ -29,11 +29,22 @@ _UI_DIR = Path(__file__).parent / 'tray_ui'
 _active_repo: list[str] = ['']
 _active_port: list[int] = [DEFAULT_PORT]
 
+# Branch-switch alert — set by POST /notify-branch-switch, cleared on task set or dismiss
+_branch_alert: list[str | None] = [None]
+
+# Callback registered by tray.py to show the popup window from a background thread
+_show_window_cb: list = [None]
+
+
 def get_active_repo() -> str:
     return _active_repo[0]
 
 def get_active_port() -> int:
     return _active_port[0]
+
+def register_show_callback(cb) -> None:
+    """Register a callable that opens and positions the popup window."""
+    _show_window_cb[0] = cb
 
 # ── recent repos ──────────────────────────────────────────────────
 
@@ -153,7 +164,9 @@ def create_app(repo_path: str) -> Flask:
 
     @app.get('/status')
     def get_status():
-        return jsonify(get_status_dict(root()))
+        result = get_status_dict(root())
+        result['branch_alert'] = _branch_alert[0]
+        return jsonify(result)
 
     # ── metrics ───────────────────────────────────────────────────
 
@@ -219,6 +232,7 @@ def create_app(repo_path: str) -> Flask:
             cwd=root(), capture_output=True, text=True,
         )
         if result.returncode == 0:
+            _branch_alert[0] = None
             from cram.targets import save_default_target
             save_default_target(root(), target)
         return jsonify({
@@ -226,6 +240,25 @@ def create_app(repo_path: str) -> Flask:
             'output':  result.stdout,
             'error':   result.stderr,
         })
+
+    @app.post('/notify-branch-switch')
+    def notify_branch_switch():
+        data   = request.get_json(silent=True) or {}
+        branch = (data.get('branch') or 'unknown').strip()
+        from cram.sync_context import reset_task
+        reset_task(root())
+        _branch_alert[0] = branch
+        if _show_window_cb[0]:
+            try:
+                _show_window_cb[0]()
+            except Exception:
+                pass
+        return jsonify({'success': True})
+
+    @app.post('/dismiss-branch-alert')
+    def dismiss_branch_alert():
+        _branch_alert[0] = None
+        return jsonify({'success': True})
 
     @app.post('/sync')
     def run_sync():
@@ -319,6 +352,11 @@ def run(repo_path: str, port: int = DEFAULT_PORT) -> None:
     """Start the server (blocking). Call from a daemon thread in tray.py."""
     free_port = find_free_port(port)
     _active_port[0] = free_port
+    try:
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        (_CONFIG_DIR / 'port').write_text(str(free_port))
+    except Exception:
+        pass
     flask_app = create_app(repo_path)
     flask_app.run(
         host='127.0.0.1',

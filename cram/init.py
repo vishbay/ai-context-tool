@@ -5,7 +5,7 @@ import sys
 import fnmatch
 
 from cram.utils import call_model, strip_code_fence
-from cram.hooks import install_hook
+from cram.hooks import install_hook, install_checkout_hook
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
@@ -121,6 +121,7 @@ def init_repo(target: str = '.') -> None:
     write_gitignore(context_dir)
 
     install_hook(root)
+    install_checkout_hook(root)
 
     print(f"\nDone. Created .cram-ai-context/ with:")
     for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']:

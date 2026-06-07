@@ -72,6 +72,45 @@ header {
 .state-not-init .badge,
 .state-loading  .badge { background: rgba(255,77,109,0.12); border-color: rgba(255,77,109,0.25); color: var(--red); }
 
+/* ── branch-switch alert banner ──────────────────────────── */
+
+.branch-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: rgba(248,197,55,0.12);
+  border-bottom: 1px solid rgba(248,197,55,0.25);
+  color: var(--amber);
+  font-size: 11.5px;
+  font-weight: 600;
+  animation: alertSlideIn 0.2s ease;
+}
+
+.branch-alert.hidden { display: none; }
+
+.branch-alert span {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.branch-alert-dismiss {
+  background: none;
+  border: none;
+  color: var(--amber);
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.branch-alert-dismiss:hover { opacity: 1; }
+
+@keyframes alertSlideIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ── header icon buttons ─────────────────────────────────── */
 
 .icon-btn {
