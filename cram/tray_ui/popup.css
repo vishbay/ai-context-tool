@@ -457,8 +457,12 @@ select:focus { border-color: rgba(0,245,212,0.3); }
 
 /* ── output / activity log ───────────────────────────────── */
 
-.output {
+.output-wrap {
+  position: relative;
   margin: 0 14px 8px;
+}
+
+.output {
   padding: 8px 10px;
   background: rgba(0,0,0,0.35);
   border: 1px solid var(--border);
@@ -470,6 +474,9 @@ select:focus { border-color: rgba(0,245,212,0.3); }
   max-height: 96px;
   overflow-y: auto;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 .output.error { color: var(--red); border-color: rgba(255,77,109,0.2); }
 
@@ -479,7 +486,26 @@ select:focus { border-color: rgba(0,245,212,0.3); }
   color: var(--muted);
   margin-right: 5px;
   user-select: none;
+  -webkit-user-select: none;
 }
+
+.copy-log-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 1px 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  line-height: 1.6;
+}
+.output-wrap:hover .copy-log-btn { opacity: 1; }
+.copy-log-btn:hover { color: var(--text); background: var(--surface); }
 
 /* ── footer ──────────────────────────────────────────────── */
 

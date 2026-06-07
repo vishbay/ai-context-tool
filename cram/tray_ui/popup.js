@@ -1,8 +1,9 @@
 /* popup.js — cram-ai tray popup logic */
 
-const app    = document.getElementById('app');
-const badge  = document.getElementById('badge');
-const output = document.getElementById('output');
+const app        = document.getElementById('app');
+const badge      = document.getElementById('badge');
+const output     = document.getElementById('output');
+const outputWrap = document.getElementById('output-wrap');
 
 // Heights used when resizing via pywebview API
 const HEIGHT_FULL    = 492;
@@ -68,8 +69,22 @@ function showOutput(text, isError = false) {
     Array.from(lines).slice(0, lines.length - _MAX_LOG_LINES).forEach(el => el.remove());
   }
 
-  output.classList.remove('hidden');
+  outputWrap.classList.remove('hidden');
   output.scrollTop = output.scrollHeight;
+}
+
+function cramCopyLog() {
+  const text = Array.from(output.querySelectorAll('.log-line'))
+    .map(el => el.textContent)
+    .join('\n');
+  navigator.clipboard.writeText(text).catch(() => {
+    // Fallback: select all text in the output div
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(output);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
 }
 
 function setLoading(btn, loading) {

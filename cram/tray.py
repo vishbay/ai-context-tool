@@ -132,23 +132,35 @@ def _pick_repo_native() -> str | None:
     return None
 
 
+_POPUP_H = 492  # must match HEIGHT_FULL in popup.js
+
+
 def _popup_position() -> tuple[int | None, int | None]:
     """Return (x, y) to anchor the popup near the system tray.
 
-    macOS: top-right corner, just below the menu bar (y=0 is top in pywebview).
-    Windows: bottom-right corner, above the taskbar.
-    Linux/unknown: returns (None, None) — pywebview centres by default.
+    pywebview on macOS passes x/y directly to NSWindow.setFrameOrigin_, which
+    uses AppKit's bottom-left origin (y=0 is the bottom of the screen).
+    To place the popup just below the menu bar we compute:
+        y = screen_height - menu_bar_height - popup_height
+
+    Windows uses top-left origin so no conversion is needed there.
     """
     try:
         if sys.platform == 'darwin':
-            from AppKit import NSScreen
-            sw = int(NSScreen.mainScreen().frame().size.width)
-            return (sw - 290, 28)   # 28px = macOS menu bar height
+            from AppKit import NSScreen, NSStatusBar
+            frame = NSScreen.mainScreen().frame()
+            sw = int(frame.size.width)
+            sh = int(frame.size.height)
+            try:
+                mb = int(NSStatusBar.systemStatusBar().thickness())
+            except Exception:
+                mb = 24
+            return (sw - 290, sh - mb - _POPUP_H)
         elif sys.platform == 'win32':
             import ctypes
             sw = ctypes.windll.user32.GetSystemMetrics(0)
             sh = ctypes.windll.user32.GetSystemMetrics(1)
-            return (sw - 290, sh - 540)  # above taskbar (~48px) with 492px window
+            return (sw - 290, sh - _POPUP_H - 48)  # 48px = typical taskbar height
     except Exception:
         pass
     return (None, None)
@@ -221,6 +233,13 @@ def _build_menu(repo_path: str) -> pystray.Menu:
     def on_show_popup(icon, item):
         if _win[0]:
             _win[0].show()
+            # Re-anchor to tray corner each time it's opened
+            x, y = _popup_position()
+            if x is not None:
+                try:
+                    _win[0].move(x, y)
+                except Exception:
+                    pass
         else:
             import webbrowser
             webbrowser.open(f'http://127.0.0.1:{_get_port()}/popup')

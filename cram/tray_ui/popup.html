@@ -101,7 +101,10 @@
   </div>
 
   <!-- Activity log — persists for the session -->
-  <div id="output" class="output collapsible hidden"></div>
+  <div class="output-wrap collapsible hidden" id="output-wrap">
+    <div id="output" class="output"></div>
+    <button class="copy-log-btn" onclick="cramCopyLog()" title="Copy log">⎘</button>
+  </div>
 
   <!-- Footer actions -->
   <footer class="collapsible">
