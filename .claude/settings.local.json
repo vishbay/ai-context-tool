@@ -1,4 +1,7 @@
 {
+  "env": {
+    "PATH": "/Users/vishbay/cram-ai/.venv/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  },
   "permissions": {
     "allow": [
       "Bash(mkdir -p /Users/vishbay/ai-context-tool/ai_context)",
@@ -33,7 +36,15 @@
       "Bash(.venv/bin/cram --help)",
       "Bash(git remote *)",
       "Bash(printf '#!/bin/sh\\\\n# Installed by cram-ai — keeps .ai-context/ARCHITECTURE.md fresh\\\\nif command -v cram >/dev/null 2>&1; then\\\\n    cram sync\\\\nelif command -v python3 >/dev/null 2>&1; then\\\\n    python3 -m cram.sync_context\\\\nfi\\\\n')",
-      "Bash(chmod +x .git/hooks/post-commit)"
+      "Bash(chmod +x .git/hooks/post-commit)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(cram task *)",
+      "Bash(ls /Users/vishbay/cram-ai/.venv/bin/cram 2>/dev/null && echo \"found in venv\" || echo \"not in venv\"; find /opt/homebrew /usr/local -name \"cram\" -type f 2>/dev/null | head -5)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

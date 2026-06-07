@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 from cram.init import scan_structure
-from cram.utils import call_model, strip_code_fence
+from cram.utils import call_context_model, strip_code_fence
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 
@@ -35,7 +35,7 @@ def update_architecture_md(structure: str, diff: str, current: str) -> str:
         f"Recent git diff:\n{diff}\n\n"
         f"Return only the updated markdown, no explanation."
     )
-    return strip_code_fence(call_model(prompt))
+    return strip_code_fence(call_context_model(prompt))
 
 
 def sync(root: str = '.') -> None:
@@ -61,7 +61,9 @@ def sync(root: str = '.') -> None:
     print("Scanning repo structure ...")
     structure = scan_structure(root)
 
-    print("Updating ARCHITECTURE.md via Haiku ...")
+    from cram.utils import get_model_recommendations
+    ctx_model, _ = get_model_recommendations()
+    print(f"Updating ARCHITECTURE.md via {ctx_model} ...")
     updated = update_architecture_md(structure, diff, current)
 
     with open(arch_path, 'w') as f:

@@ -271,6 +271,34 @@ def create_app(repo_path: str) -> Flask:
             func()
         return jsonify({'success': True})
 
+    # ── model discovery & settings ────────────────────────────────
+
+    @app.get('/models')
+    def get_models():
+        from cram.utils import discover_models, load_settings, pick_context_model, pick_coding_model
+        available = discover_models()
+        settings  = load_settings()
+        return jsonify({
+            'available':     available,
+            'context_model': settings.get('context_model', 'auto'),
+            'coding_model':  settings.get('coding_model',  'auto'),
+            'auto_context':  (pick_context_model(available) or {}).get('name', ''),
+            'auto_coding':   (pick_coding_model(available)  or {}).get('name', ''),
+        })
+
+    @app.get('/settings')
+    def get_settings():
+        from cram.utils import load_settings
+        return jsonify(load_settings())
+
+    @app.post('/settings')
+    def post_settings():
+        from cram.utils import save_settings
+        data = request.get_json(silent=True) or {}
+        allowed = {'context_model', 'coding_model', 'ollama_url', 'proxy'}
+        save_settings({k: v for k, v in data.items() if k in allowed})
+        return jsonify({'success': True})
+
     return app
 
 
