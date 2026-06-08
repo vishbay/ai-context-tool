@@ -214,6 +214,7 @@ class TestGetHealthDeterminism:
         monkeypatch.setattr(health_mod, 'context_health', lambda root: fake_health)
 
         result = srv.get_health()
-        assert 'OVER' in result
+        assert 'over' in result
+        assert 'trim before next sync' in result
         assert 'GOTCHAS.md' in result
         assert 'recommendation' in result

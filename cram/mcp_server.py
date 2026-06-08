@@ -230,7 +230,7 @@ def get_health() -> str:
         budget = info['budget']
         bstat  = info['budget_status']
         if budget:
-            suffix = ' OVER — trim before next sync' if bstat == 'over' else ''
+            suffix = ' — trim before next sync' if bstat == 'over' else ''
             lines.append(f'- {fname}  {tok:,} tok (budget {budget:,}) {bstat}{suffix}')
         else:
             lines.append(f'- {fname}  {tok:,} tok')
