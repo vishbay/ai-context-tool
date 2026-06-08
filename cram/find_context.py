@@ -228,7 +228,7 @@ def populate_current_task(
 # ── main entry ────────────────────────────────────────────────────
 
 
-def find_context(task: str, target: str | None = None) -> None:
+def find_context(task: str, target: str | None = None, inject: bool = False) -> None:
     if not os.path.isdir(CONTEXT_DIR):
         print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
@@ -308,7 +308,7 @@ def find_context(task: str, target: str | None = None) -> None:
             f"  Increase AICONTEXT_MAX_LINES or AICONTEXT_MAX_EXCERPT_LINES to pad context."
         )
 
-    if target:
+    if target and (target != 'claude' or inject):
         arch_content = _read_context_file('ARCHITECTURE.md')
         with open(task_path) as fh:
             task_content = fh.read()
@@ -320,7 +320,8 @@ def find_context(task: str, target: str | None = None) -> None:
             if not written:
                 print("  (no known tool indicators found — try a specific --target)")
         else:
-            path = _targets.write_to_target(root, target, task_content, arch_content)
+            path = _targets.write_to_target(root, target, task_content, arch_content,
+                                             inject=(target == 'claude' and inject))
             print(f"  → {os.path.relpath(path)}")
 
     # ── Save session metadata ─────────────────────────────────────
@@ -342,7 +343,9 @@ def find_context(task: str, target: str | None = None) -> None:
     except Exception:
         pass
 
-    print(f"\n✓ Ready — ~{tokens:,} tokens{savings_note} · switch to {coding_model}")
+    print(f"\n✓ Context ready — ~{tokens:,} tokens{savings_note}")
+    if not (target and target != 'claude') and not inject:
+        print(f'  Call get_context("{task}") via the cram-ai MCP server to load it.')
     if expiry:
         print(f"  Context resets on commit after {expiry} "
               f"(run `cram continue` to extend)")
@@ -366,6 +369,11 @@ def main() -> None:
             'Falls back to default_target in .cram-ai-context/config.toml.'
         ),
     )
+    parser.add_argument(
+        '--inject',
+        action='store_true',
+        help='Write task content into CLAUDE.md instead of the MCP pointer (backward compat).',
+    )
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
 
@@ -384,7 +392,7 @@ def main() -> None:
     os.chdir(root)
     task = ' '.join(args.task)
     effective_target = args.target or _targets.load_default_target(root)
-    find_context(task, effective_target)
+    find_context(task, effective_target, inject=args.inject)
 
 
 if __name__ == '__main__':

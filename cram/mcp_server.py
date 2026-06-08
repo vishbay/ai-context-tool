@@ -96,16 +96,8 @@ def get_context(task: str) -> str:
 
         populate_current_task(task, file_entries, ctx_model, coding_model)
 
-        # Return the assembled context
         with open(_ctx_path('CURRENT_TASK.md')) as f:
-            content = f.read()
-
-        token_est = len(content) // 4
-        header = (
-            f"<!-- cram-ai context · {len([e for e in file_entries if os.path.exists(e[0])])} files · "
-            f"~{token_est:,} tokens -->\n\n"
-        )
-        return header + content
+            return f.read()
 
     finally:
         os.chdir(orig_dir)
@@ -143,7 +135,7 @@ def get_symbols(query: str = '') -> str:
         return content
 
     q = query.lower()
-    matching = [line for line in content.splitlines() if q in line.lower()]
+    matching = sorted(line for line in content.splitlines() if q in line.lower())
     if not matching:
         return f'No symbols matching "{query}" found.\n\nFull index:\n{content}'
     return f'Symbols matching "{query}":\n\n' + '\n'.join(matching)
@@ -195,12 +187,7 @@ def add_file(path: str, identifiers: str = '') -> str:
         if ok:
             with open(_ctx_path('CURRENT_TASK.md')) as f:
                 content = f.read()
-            token_est = len(content) // 4
-            return (
-                output.rstrip()
-                + f'\n\n<!-- context updated · ~{token_est:,} tokens -->\n\n'
-                + content
-            )
+            return output.rstrip() + '\n\n' + content
         return output or f'Could not add {path} — check the file exists and a session is active.'
     finally:
         os.chdir(orig_dir)
