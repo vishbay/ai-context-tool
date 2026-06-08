@@ -5,11 +5,23 @@ const badge      = document.getElementById('badge');
 const output     = document.getElementById('output');
 const outputWrap = document.getElementById('output-wrap');
 
-// Heights used when resizing via pywebview API
-const HEIGHT_FULL    = 528;
+// Window size constants
 const HEIGHT_COMPACT = 52;
-const HEIGHT_HELP    = 728;
-const _SUGGEST_H     = 44;  // extra height when suggest bar is visible
+const WIDTH_DEFAULT  = 320;
+const WIDTH_MIN      = 280;
+const WIDTH_MAX      = 800;
+
+let _currentWidth = WIDTH_DEFAULT;
+
+// Model pricing — base input $/MTok; write=1.25×, read=0.10× for all models
+const MODEL_PRICING = {
+  haiku45:  { label: 'Haiku 4.5',  base: 1.0 },
+  sonnet46: { label: 'Sonnet 4.6', base: 3.0 },
+  opus4:    { label: 'Opus 4',     base: 5.0 },
+};
+
+let _selectedModel = localStorage.getItem('selectedModel') || 'sonnet46';
+let _rawMetrics    = null;
 
 // ── state helpers ─────────────────────────────────────────
 
@@ -99,16 +111,21 @@ function setLoading(btn, loading) {
 
 // ── window size helpers ───────────────────────────────────
 
-function _currentTargetHeight() {
-  const helpOpen     = !document.getElementById('help-panel').classList.contains('hidden');
-  const suggestShown = !document.getElementById('suggest-bar').classList.contains('hidden');
-  return (helpOpen ? HEIGHT_HELP : HEIGHT_FULL) + (suggestShown ? _SUGGEST_H : 0);
+function _resizeTo(h, w) {
+  if (w !== undefined) _currentWidth = Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, w));
+  if (window.pywebview?.api?.set_size) {
+    window.pywebview.api.set_size(Math.max(HEIGHT_COMPACT, h), _currentWidth);
+  }
 }
 
-function _resizeTo(h) {
-  if (window.pywebview?.api?.set_size) {
-    window.pywebview.api.set_size(h);
-  }
+let _autoHeightTimer = null;
+function _autoHeight() {
+  if (app.classList.contains('compact')) return;
+  clearTimeout(_autoHeightTimer);
+  _autoHeightTimer = setTimeout(() => {
+    const h = Math.round(app.getBoundingClientRect().height) + 1;
+    _resizeTo(h);
+  }, 50);
 }
 
 // ── minimize / expand ─────────────────────────────────────
@@ -120,7 +137,7 @@ function cramMinimize() {
 
 function cramExpand() {
   app.classList.remove('compact');
-  _resizeTo(_currentTargetHeight());
+  _autoHeight();
 }
 
 function cramExpandIfCompact() {
@@ -142,7 +159,7 @@ async function toggleHelp() {
   const panel  = document.getElementById('help-panel');
   const isOpen = !panel.classList.contains('hidden');
   panel.classList.toggle('hidden');
-  _resizeTo(_currentTargetHeight());
+  _autoHeight();
   if (!isOpen) {
     // Sync the auto-suggest toggle with persisted setting
     try {
@@ -194,12 +211,12 @@ function toggleRepoDropdown() {
   if (isOpen) {
     dropdown.classList.add('hidden');
     bar.classList.remove('open');
-    _resizeTo(_currentTargetHeight());
+    _autoHeight();
   } else {
     loadRecentRepos();
     dropdown.classList.remove('hidden');
     bar.classList.add('open');
-    _resizeTo(_currentTargetHeight() + 160);
+    _autoHeight();
   }
 }
 
@@ -231,7 +248,7 @@ async function cramBrowseRepo() {
   // Close dropdown first
   document.getElementById('repo-dropdown').classList.add('hidden');
   document.getElementById('repo-bar').classList.remove('open');
-  _resizeTo(_currentTargetHeight());
+  _autoHeight();
 
   if (window.pywebview?.api?.browse_repo) {
     const path = await window.pywebview.api.browse_repo();
@@ -300,6 +317,34 @@ async function dismissBranchAlert() {
   fetch('/dismiss-branch-alert', { method: 'POST' }).catch(() => {});
 }
 
+function _applyModelPricing() {
+  if (!_rawMetrics) return;
+  const ratio  = MODEL_PRICING[_selectedModel].base / MODEL_PRICING.sonnet46.base;
+  const nocram = _rawMetrics.nocram_daily * ratio;
+  const cram   = _rawMetrics.cram_daily   * ratio;
+  const saving = Math.max(0, nocram - cram);
+
+  document.getElementById('cost-saved').textContent =
+    saving >= 1 ? `$${saving.toFixed(2)}` : `$${saving.toFixed(3)}`;
+  document.getElementById('nocram-daily').textContent =
+    nocram >= 1 ? `$${nocram.toFixed(2)}` : `$${nocram.toFixed(3)}`;
+  document.getElementById('cram-daily').textContent =
+    cram >= 1 ? `$${cram.toFixed(2)}` : `$${cram.toFixed(3)}`;
+
+  const repoTok = _rawMetrics.repo_tokens >= 1000
+    ? `${(_rawMetrics.repo_tokens / 1000).toFixed(0)}k`
+    : String(_rawMetrics.repo_tokens);
+  document.getElementById('daily-est-line').textContent =
+    `repo: ~${repoTok} tok · 4 sessions × 4 tasks/day · ${MODEL_PRICING[_selectedModel].label}`;
+}
+
+function onModelChange() {
+  const sel = document.getElementById('model-select');
+  _selectedModel = sel.value;
+  localStorage.setItem('selectedModel', _selectedModel);
+  _applyModelPricing();
+}
+
 async function fetchMetrics() {
   try {
     const res  = await fetch('/metrics');
@@ -317,26 +362,8 @@ async function fetchMetrics() {
     document.getElementById('savings-pct').textContent =
       `${data.savings_pct}%`;
 
-    document.getElementById('cost-saved').textContent =
-      data.daily_saving >= 1
-        ? `$${data.daily_saving.toFixed(2)}`
-        : `$${data.daily_saving.toFixed(3)}`;
-
-    document.getElementById('nocram-daily').textContent =
-      data.nocram_daily >= 1
-        ? `$${data.nocram_daily.toFixed(2)}`
-        : `$${data.nocram_daily.toFixed(3)}`;
-
-    document.getElementById('cram-daily').textContent =
-      data.cram_daily >= 1
-        ? `$${data.cram_daily.toFixed(2)}`
-        : `$${data.cram_daily.toFixed(3)}`;
-
-    const repoTok = data.repo_tokens >= 1000
-      ? `${(data.repo_tokens / 1000).toFixed(0)}k`
-      : String(data.repo_tokens);
-    document.getElementById('daily-est-line').textContent =
-      `repo: ~${repoTok} tok · 4 sessions × 4 tasks/day · Sonnet 4.6`;
+    _rawMetrics = data;
+    _applyModelPricing();
 
     const parts = [];
     if (data.last_task_age) parts.push(`task: ${data.last_task_age} ago`);
@@ -488,13 +515,13 @@ function showSuggestion(text) {
   _currentSuggestion = text;
   document.getElementById('suggest-text').textContent = text;
   document.getElementById('suggest-bar').classList.remove('hidden');
-  _resizeTo(_currentTargetHeight());
+  _autoHeight();
 }
 
 function hideSuggestion() {
   _suggestionDismissed = true;
   document.getElementById('suggest-bar').classList.add('hidden');
-  _resizeTo(_currentTargetHeight());
+  _autoHeight();
 }
 
 function useSuggestion() {
@@ -657,6 +684,55 @@ function cramQuit() {
 setState('loading');
 setBadge('…');
 
-refresh();
+// Restore saved width and model; auto-size height once pywebview API is ready
+window.addEventListener('pywebviewready', () => {
+  const saved = parseInt(localStorage.getItem('popupWidth') || '0', 10);
+  if (saved >= WIDTH_MIN && saved <= WIDTH_MAX) _currentWidth = saved;
+
+  const sel = document.getElementById('model-select');
+  if (sel && MODEL_PRICING[_selectedModel]) sel.value = _selectedModel;
+
+  _autoHeight();
+});
+
+// Auto-resize height whenever #app content changes
+new ResizeObserver(_autoHeight).observe(app);
+
+// ── left-edge drag to resize width ────────────────────────
+
+(function () {
+  const handle = document.getElementById('resize-handle');
+  if (!handle) return;
+
+  let drag = null;
+  let raf  = null;
+
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    drag = { startX: e.screenX, startWidth: _currentWidth };
+  });
+
+  handle.addEventListener('pointermove', e => {
+    if (!drag || raf) return;
+    const sx = e.screenX;
+    raf = requestAnimationFrame(() => {
+      raf = null;
+      if (!drag) return;
+      const delta  = sx - drag.startX;
+      const newW   = Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, drag.startWidth - delta));
+      if (newW !== _currentWidth) _resizeTo(window.innerHeight, newW);
+    });
+  });
+
+  const endDrag = () => {
+    drag = null;
+    localStorage.setItem('popupWidth', String(_currentWidth));
+  };
+  handle.addEventListener('pointerup',     endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+})();
+
+refresh().then(_autoHeight);
 
 setInterval(refresh, 30_000);

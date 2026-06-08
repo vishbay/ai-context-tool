@@ -93,9 +93,17 @@ class _PopupAPI:
         import threading
         threading.Timer(0.05, lambda: os._exit(0)).start()
 
-    def set_size(self, height: int) -> None:
+    def set_size(self, height: int, width: int = 320) -> None:
         if _win[0]:
-            _win[0].resize(320, int(height))
+            w = max(280, min(800, int(width)))
+            h = max(52, min(1400, int(height)))
+            _win[0].resize(w, h)
+            x, y = _popup_position(w, h)
+            if x is not None:
+                try:
+                    _win[0].move(x, y)
+                except Exception:
+                    pass
 
     def browse_repo(self) -> str | None:
         """Open a native folder picker and return the chosen path (or None)."""
@@ -151,19 +159,16 @@ def _pick_repo_native() -> str | None:
     return None
 
 
-_POPUP_W = 320   # must match body width in popup.css
-_POPUP_H = 528   # must match HEIGHT_FULL in popup.js
+_POPUP_W = 320   # default width
+_POPUP_H = 528   # initial height (JS auto-adjusts via set_size)
 
 
-def _popup_position() -> tuple[int | None, int | None]:
-    """Return (x, y) to anchor the popup near the system tray.
+def _popup_position(w: int = _POPUP_W, h: int = _POPUP_H) -> tuple[int | None, int | None]:
+    """Return (x, y) to anchor the popup near the system tray, keeping the right
+    edge fixed and the top edge just below the menu bar.
 
-    pywebview on macOS passes x/y directly to NSWindow.setFrameOrigin_, which
-    uses AppKit's bottom-left origin (y=0 is the bottom of the screen).
-    To place the popup just below the menu bar we compute:
-        y = screen_height - menu_bar_height - popup_height
-
-    Windows uses top-left origin so no conversion is needed there.
+    pywebview on macOS passes x/y to NSWindow.setFrameOrigin_ (AppKit bottom-left
+    origin; y=0 is the bottom of the screen).  Windows uses top-left origin.
     """
     try:
         if sys.platform == 'darwin':
@@ -175,12 +180,12 @@ def _popup_position() -> tuple[int | None, int | None]:
                 mb = int(NSStatusBar.systemStatusBar().thickness())
             except Exception:
                 mb = 24
-            return (sw - _POPUP_W - 10, sh - mb - _POPUP_H)
+            return (sw - w - 10, sh - mb - h)
         elif sys.platform == 'win32':
             import ctypes
             sw = ctypes.windll.user32.GetSystemMetrics(0)
             sh = ctypes.windll.user32.GetSystemMetrics(1)
-            return (sw - _POPUP_W - 10, sh - _POPUP_H - 48)  # 48px = typical taskbar height
+            return (sw - w - 10, sh - h - 48)  # 48px = typical taskbar height
     except Exception:
         pass
     return (None, None)
@@ -347,7 +352,7 @@ def main() -> None:
         on_top=True,
         hidden=True,
         js_api=_PopupAPI(repo),
-        min_size=(_POPUP_W, 360),
+        min_size=(280, 52),
         background_color='#111115',
         **pos_kwargs,
     )

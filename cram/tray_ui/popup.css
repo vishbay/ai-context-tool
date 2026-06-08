@@ -49,8 +49,8 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  width: 320px;
-  min-height: 100vh;
+  width: 100%;
+  min-height: 0;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -66,11 +66,28 @@ html, body {
 #app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: 0 24px 64px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* ── width resize handle ────────────────────────────────────────── */
+
+#resize-handle {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 100vh;
+  cursor: ew-resize;
+  z-index: 9999;
+  background: transparent;
+  transition: background 0.15s;
+}
+#resize-handle:hover {
+  background: linear-gradient(to right, rgba(0,255,198,0.15), transparent);
 }
 
 /* ── header ─────────────────────────────────────────────────────── */
@@ -439,6 +456,25 @@ select:focus { border-color: var(--accent); color: var(--text); }
   letter-spacing: 0.8px;
   color: var(--muted);
   margin-bottom: 10px;
+}
+
+.model-select {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  padding: 0 3px;
+  outline: none;
+  vertical-align: baseline;
+}
+.model-select:hover {
+  color: var(--text);
+  border-color: var(--muted);
 }
 
 .metric-row {

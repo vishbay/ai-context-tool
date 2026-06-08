@@ -289,12 +289,18 @@ returning ~1–2K tokens of targeted excerpts.
 For the average developer (~400K tokens/day), roughly **120–200K tokens/day is orientation
 overhead** — paid on every session, for every task, from scratch.
 
-**cram tray shows live daily estimates** based on your actual repo size (4 sessions × 4 tasks/day,
-Sonnet 4.6 pricing):
+**cram tray shows live daily estimates** based on your actual repo size (4 sessions × 4 tasks/day).
+Use the model selector in the tray popup to see estimates for your model:
+
+| Model | Base input price |
+|---|---|
+| Haiku 4.5 | $1.00 / MTok |
+| Sonnet 4.6 | $3.00 / MTok |
+| Opus 4 | $5.00 / MTok |
 
 | Metric | What it shows |
 |---|---|
-| % tokens saved | Cram context vs full repo scan |
+| Context reduction | How much smaller cram context is vs full repo scan |
 | Without cram/day | Estimated daily cost if the agent reads the full repo each task |
 | With cram/day | Estimated daily cost using the frozen context layer (MCP path) |
 | Saved/day | The difference — scales with repo size and session frequency |
