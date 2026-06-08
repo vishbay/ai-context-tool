@@ -5,7 +5,7 @@ import sys
 import fnmatch
 
 from cram.utils import call_model, strip_code_fence
-from cram.hooks import install_hook, install_checkout_hook, install_global_claude_md
+from cram.hooks import install_hook, install_checkout_hook, install_global_claude_md, install_claude_code_hooks
 from cram.symbols import write_symbols_md
 from cram.targets import write_to_target
 
@@ -194,6 +194,7 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     install_hook(root)
     install_checkout_hook(root)
     install_global_claude_md()
+    install_claude_code_hooks(root)
 
     # Write pointer-only CLAUDE.md to repo root (MCP config snippet, not injected content)
     write_to_target(root, 'claude', '')
@@ -212,9 +213,8 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     print("  2. Edit .cram-ai-context/DECISIONS.md — add your team's invariants")
     print("  3. Edit .cram-ai-context/GOTCHAS.md — add non-obvious traps (add more over time)")
     print(f"  4. Commit context so teammates get it automatically:")
-    print(f"       git add .cram-ai-context/ CLAUDE.md && git commit -m \"chore: init cram-ai\"")
-    print("  5. Add cram-ai to your .claude/settings.json (see CLAUDE.md for the snippet)")
-    print("  6. Call get_context(\"your task\") at the start of each session")
+    print(f"       git add .cram-ai-context/ .claude/ CLAUDE.md && git commit -m \"chore: init cram-ai\"")
+    print("  5. Run `cram task \"your task\"` to set the active task — context auto-loads next session")
     if not team:
         print("\nTip: run `cram init --team` to also generate a GitHub Actions workflow")
         print("     that keeps ARCHITECTURE.md fresh on every push.")

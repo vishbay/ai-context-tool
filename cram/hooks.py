@@ -10,10 +10,13 @@ GLOBAL_CLAUDE_MD    = os.path.expanduser('~/.claude/CLAUDE.md')
 _CRAM_SECTION_START = "<!-- cram-ai: start -->"
 _CRAM_SECTION_END   = "<!-- cram-ai: end -->"
 _GLOBAL_CLAUDE_MD_BLOCK = """\
-> **cram-ai** — context is served via the MCP server.
-> IMPORTANT: Call get_context() as your FIRST action in every session, before
+> **cram-ai** — context is auto-loaded at session start via the SessionStart hook.
+> When you see a systemMessage "cram context loaded: <task>", acknowledge it to
+> the user in one line and proceed — do not call get_context() again.
+> If no context was auto-loaded, call get_context() before
 > answering any question or writing any code. Pass the task description as the
-> argument, or call with no arguments to reload the last task's context.
+> argument (e.g. get_context("fix the rate limiter")), or call with no arguments
+> to reload the last task's context.
 > Run `cram doctor` if tools are missing.
 """
 
@@ -143,6 +146,176 @@ def install_checkout_hook(repo_root: str = '.') -> bool:
     hooks_dir = os.path.join(git_dir, 'hooks')
     os.makedirs(hooks_dir, exist_ok=True)
     return _write_hook(os.path.join(hooks_dir, 'post-checkout'), POST_CHECKOUT_HOOK_SCRIPT, 'cram-ai')
+
+
+SESSION_START_HOOK_SCRIPT = '''\
+#!/usr/bin/env python3
+"""SessionStart hook: auto-inject cram-ai context and notify the user."""
+import json
+import sys
+from pathlib import Path
+
+
+def main():
+    task_file = Path.cwd() / \'.cram-ai-context\' / \'CURRENT_TASK.md\'
+    if not task_file.exists():
+        sys.exit(0)
+
+    try:
+        content = task_file.read_text()
+    except Exception:
+        sys.exit(0)
+
+    task = \'\'
+    lines = content.split(\'\\n\')
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(\'# Task:\'):
+            task = s[len(\'# Task:\'):].strip()
+            break
+        if s == \'## Task\':
+            for next_line in lines[i + 1:]:
+                ns = next_line.strip()
+                if ns.startswith(\'#\'):
+                    break
+                if ns and not ns.startswith(\'<!--\'):
+                    task = ns
+                    break
+            break
+
+    if not task:
+        sys.exit(0)
+
+    print(json.dumps({
+        \'additionalContext\': content,
+        \'systemMessage\': f\'cram context loaded: {task}\',
+    }))
+
+
+main()
+'''
+
+POST_CONTEXT_HOOK_SCRIPT = '''\
+#!/usr/bin/env python3
+"""PostToolUse hook: show a user note after get_context() is called via MCP."""
+import json
+import sys
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        sys.exit(0)
+
+    result = \'\'
+    tool_response = data.get(\'tool_response\', data.get(\'tool_result\', \'\'))
+    if isinstance(tool_response, dict):
+        for block in tool_response.get(\'content\', []):
+            if isinstance(block, dict) and block.get(\'type\') == \'text\':
+                result = block.get(\'text\', \'\')
+                break
+    elif isinstance(tool_response, str):
+        result = tool_response
+
+    task = \'\'
+    for line in result.split(\'\\n\'):
+        s = line.strip()
+        if s.startswith(\'# Task:\'):
+            task = s[len(\'# Task:\'):].strip()
+            break
+
+    note = \'cram context loaded\'
+    if task:
+        note += f\': {task}\'
+
+    print(json.dumps({\'systemMessage\': note}))
+
+
+main()
+'''
+
+
+def install_claude_code_hooks(repo_root: str = '.') -> bool:
+    """Write Claude Code hook scripts and wire them into .claude/settings.json.
+
+    Also registers the cram-ai MCP server so get_context() works out of the box.
+    Returns True if anything was written, False if already configured.
+    """
+    import json as _json
+
+    root = os.path.abspath(repo_root)
+    hooks_dir = os.path.join(root, '.claude', 'hooks')
+    os.makedirs(hooks_dir, exist_ok=True)
+
+    wrote_any = False
+    for fname, script in [
+        ('cram_session_start.py', SESSION_START_HOOK_SCRIPT),
+        ('cram_post_context.py',  POST_CONTEXT_HOOK_SCRIPT),
+    ]:
+        path = os.path.join(hooks_dir, fname)
+        if os.path.exists(path):
+            print(f"  .claude/hooks/{fname} already exists — skipping.")
+            continue
+        with open(path, 'w') as f:
+            f.write(script)
+        current = os.stat(path).st_mode
+        os.chmod(path, current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        print(f"  .claude/hooks/{fname}")
+        wrote_any = True
+
+    settings_path = os.path.join(root, '.claude', 'settings.json')
+    settings: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path) as f:
+                settings = _json.load(f)
+        except Exception:
+            pass
+
+    changed = False
+
+    mcp_servers = settings.setdefault('mcpServers', {})
+    if 'cram-ai' not in mcp_servers:
+        mcp_servers['cram-ai'] = {'command': 'cram', 'args': ['mcp', '--repo', root]}
+        changed = True
+
+    hooks_cfg = settings.setdefault('hooks', {})
+
+    ss_cmd = 'python3 .claude/hooks/cram_session_start.py'
+    session_start = hooks_cfg.setdefault('SessionStart', [])
+    if not any(
+        any(h.get('command') == ss_cmd for h in entry.get('hooks', []))
+        for entry in session_start
+    ):
+        session_start.append({
+            'matcher': '*',
+            'hooks': [{'type': 'command', 'command': ss_cmd}],
+        })
+        changed = True
+
+    pt_cmd = 'python3 .claude/hooks/cram_post_context.py'
+    post_tool = hooks_cfg.setdefault('PostToolUse', [])
+    if not any(
+        any(h.get('command') == pt_cmd for h in entry.get('hooks', []))
+        for entry in post_tool
+    ):
+        post_tool.append({
+            'matcher': 'mcp__cram-ai__get_context',
+            'hooks': [{'type': 'command', 'command': pt_cmd}],
+        })
+        changed = True
+
+    if changed:
+        with open(settings_path, 'w') as f:
+            _json.dump(settings, f, indent=2)
+            f.write('\n')
+        print(f"  .claude/settings.json")
+        return True
+
+    if not wrote_any:
+        print(f"  .claude/settings.json already configured — skipping.")
+    return wrote_any
 
 
 def uninstall_hook(repo_root: str = '.') -> None:
