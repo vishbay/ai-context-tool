@@ -125,12 +125,13 @@ server once and the tool can call context tools directly.
 
 | Tool | What it returns | When to call it |
 |---|---|---|
-| `get_context(task='')` | Runs symbol lookup → file selection → excerpt extraction. No-arg: returns last CURRENT_TASK.md without re-running the LLM. | First thing every session |
+| `get_context(task='')` | Runs symbol lookup → file selection → excerpt extraction. No-arg: returns last CURRENT_TASK.md without re-running the LLM. Prepends a staleness warning when context is stale or critical. | First thing every session |
 | `get_architecture()` | ARCHITECTURE.md — repo structure, tech stack, key files | Orientation in an unfamiliar area |
 | `get_symbols(query='')` | SYMBOLS.md — source files mapped to public identifiers, optionally filtered | Finding where a function is defined |
 | `get_decisions()` | DECISIONS.md — architectural commitments | Before making a design choice |
 | `get_gotchas()` | GOTCHAS.md — non-obvious traps and foot-guns | Before touching an unfamiliar area |
 | `add_file(path, identifiers='')` | Appends a file's excerpts to CURRENT_TASK.md | When a mid-task discovery needs new context |
+| `get_health()` | Deterministic markdown: staleness score (0–10), commits since last sync, per-file token counts vs soft budgets. Safe to cache. | Before trusting loaded context on a long-running branch |
 
 ---
 
@@ -195,6 +196,41 @@ you're mid-task.
 
 ---
 
+## Context health
+
+cram tracks how stale your context is with a **0–10 staleness score** derived from git — the
+number of commits on HEAD since ARCHITECTURE.md was last regenerated. No new state files; the
+score is always correct after a teammate pull.
+
+| Score | Band | Meaning |
+|---|---|---|
+| 0–2 | `fresh` | Up to date — work freely |
+| 3–5 | `acceptable` | Drifting slightly — fine to continue |
+| 6–7 | `stale` | Update before next session |
+| 8–10 | `critical` | Sync now — context may mislead |
+
+The score falls back to an mtime check when git is unavailable. The critical threshold defaults to
+10 commits and is tunable via `CRAM_STALE_CRITICAL_COMMITS`.
+
+**Where health surfaces:**
+- `cram status` — per-file age table + health line with score, band, and commit count
+- Tray badge — shows band + score (`stale 6/10`) with band-appropriate color
+- `get_health()` MCP tool — deterministic markdown block the agent can call before trusting context
+- `get_context()` — prepends a one-line staleness warning when band is `stale` or `critical`
+- `cram sync` — warns to stderr after regenerating if any frozen file exceeds its soft token budget
+
+**Soft token budgets** (warnings only — nothing is ever truncated):
+
+| File | Default budget | Override |
+|---|---|---|
+| `ARCHITECTURE.md` | 2,000 tok | `CRAM_BUDGET_ARCHITECTURE` |
+| `DECISIONS.md` | 600 tok | `CRAM_BUDGET_DECISIONS` |
+| `GOTCHAS.md` | 400 tok | `CRAM_BUDGET_GOTCHAS` |
+| `CURRENT_TASK.md` | 800 tok | `CRAM_BUDGET_TASK` |
+| `SYMBOLS.md` | no budget | scales with repo size |
+
+---
+
 ## CLI reference
 
 | Command | What it does |
@@ -206,7 +242,7 @@ you're mid-task.
 | `cram decide "..." [path]` | Append a dated architectural decision to DECISIONS.md |
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
-| `cram status [path]` | Show each context file with age, line count, staleness warning |
+| `cram status [path]` | Show each context file with age, line count, and token budget status. Prints a health line: `Context health : stale (6/10) — 6 commits since last sync. Run 'cram sync'.` |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
 | `cram hook install\|uninstall` | Manage the git post-commit hook manually |
@@ -256,6 +292,11 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 | `AICONTEXT_MAX_LINES` | `300` | Max lines per file when extracting excerpts |
 | `AICONTEXT_TASKS_PER_SESSION` | `4` | Assumed tasks per cache window (used by `cram benchmark`) |
 | `CRAM_TASK_GRACE_SECONDS` | `600` | Seconds after `cram task` before a commit resets context |
+| `CRAM_STALE_CRITICAL_COMMITS` | `10` | Commits since last sync that maps to staleness score 10 (critical). Lower = more sensitive. |
+| `CRAM_BUDGET_ARCHITECTURE` | `2000` | Soft token budget for ARCHITECTURE.md — warns in `cram status` and `cram sync` when exceeded |
+| `CRAM_BUDGET_DECISIONS` | `600` | Soft token budget for DECISIONS.md |
+| `CRAM_BUDGET_GOTCHAS` | `400` | Soft token budget for GOTCHAS.md |
+| `CRAM_BUDGET_TASK` | `800` | Soft token budget for CURRENT_TASK.md |
 
 ---
 
