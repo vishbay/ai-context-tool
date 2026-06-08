@@ -50,6 +50,7 @@
 
 html, body {
   width: 320px;
+  min-height: 100vh;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -65,6 +66,7 @@ html, body {
 #app {
   display: flex;
   flex-direction: column;
+  min-height: 100vh;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
