@@ -432,6 +432,15 @@ select:focus { border-color: var(--accent); color: var(--text); }
   background: var(--surface);
 }
 
+.metric-heading {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
 .metric-row {
   display: flex; align-items: stretch; margin-bottom: 5px;
 }
