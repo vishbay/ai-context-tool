@@ -18,6 +18,10 @@ CRAM_SECTION_END   = "<!-- cram-ai: end -->"
 # Keeps the prefix tiny — real context comes from get_context() via MCP.
 CLAUDE_MCP_POINTER = (
     "cram-ai context is served via the MCP server — not this file.\n\n"
+    "IMPORTANT: Call get_context() as your FIRST action in every session,\n"
+    "before answering any question or writing any code. Pass the task description\n"
+    'as the argument (e.g. get_context("fix the rate limiter")), or call with no\n'
+    "arguments to reload the last task's context.\n\n"
     "Add cram-ai to your .claude/settings.json:\n"
     "  {\n"
     '    "mcpServers": {\n'
@@ -26,8 +30,7 @@ CLAUDE_MCP_POINTER = (
     '        "args": ["mcp", "--repo", "/absolute/path/to/this/repo"]\n'
     "      }\n"
     "    }\n"
-    "  }\n\n"
-    'Then call get_context("your task") at the start of each session.'
+    "  }\n"
 )
 
 # Each entry is a cram-owned file the tool reads automatically.

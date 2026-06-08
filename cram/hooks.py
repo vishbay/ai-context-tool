@@ -11,7 +11,9 @@ _CRAM_SECTION_START = "<!-- cram-ai: start -->"
 _CRAM_SECTION_END   = "<!-- cram-ai: end -->"
 _GLOBAL_CLAUDE_MD_BLOCK = """\
 > **cram-ai** — context is served via the MCP server.
-> Call get_context("your task") at the start of each session.
+> IMPORTANT: Call get_context() as your FIRST action in every session, before
+> answering any question or writing any code. Pass the task description as the
+> argument, or call with no arguments to reload the last task's context.
 > Run `cram doctor` if tools are missing.
 """
 

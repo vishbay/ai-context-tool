@@ -47,30 +47,48 @@ def _read(filename: str) -> str:
 mcp = FastMCP(
     'cram-ai',
     instructions=(
-        "Use these tools to load focused context from the current repo before starting "
-        "a coding task. Call get_context(task) first — it identifies the relevant files "
-        "and returns their excerpts so you don't need to search the repo yourself."
+        "IMPORTANT: Call get_context() as your FIRST action in every session, before "
+        "answering any question or writing any code. Pass the task description as the "
+        "argument (e.g. get_context('fix the rate limiter')), or call with no arguments "
+        "to reload the last task's context. Skipping this means you have no focused "
+        "context and will miss key files."
     ),
 )
 
 
 @mcp.tool()
-def get_context(task: str) -> str:
+def get_context(task: str = '') -> str:
     """Load focused file excerpts for a coding task.
 
-    Runs cram's full pipeline: reads the symbol index, asks the context model
-    to identify relevant files, extracts identifier-focused excerpts, and returns
-    everything assembled as a markdown document. Call this at the start of any
-    coding task to load exactly the context you need.
+    Call this as your FIRST action in every session before writing any code.
+
+    With a task argument: runs the full pipeline — reads the symbol index, asks
+    the context model to identify relevant files, extracts identifier-focused
+    excerpts, and returns everything assembled as a markdown document.
+
+    With no argument: returns the last context loaded by `cram task`, skipping
+    the LLM pipeline. Use this at session start when the developer already ran
+    `cram task "..."` from the CLI before opening the editor.
 
     Args:
-        task: What you're about to work on, e.g. "add OAuth login to the API"
+        task: What you're about to work on, e.g. "add OAuth login to the API".
+              Omit to reload the existing context from the last `cram task` run.
     """
     if not _repo_root:
         return 'Error: repo root not configured.'
 
     if not os.path.isdir(os.path.join(_repo_root, CONTEXT_DIR)):
         return f'Error: {CONTEXT_DIR}/ not found in {_repo_root}. Run `cram init` first.'
+
+    if not task:
+        content = _read('CURRENT_TASK.md')
+        if not content:
+            return (
+                'No context loaded yet. Call get_context("your task description") '
+                'to generate context for a specific task, or run `cram task "..."` '
+                'from the terminal first.'
+            )
+        return content
 
     # Run find_context in the repo directory
     orig_dir = os.getcwd()

@@ -115,3 +115,21 @@ class TestGetContextDeterminism:
 
         assert '<!-- cram-ai context' not in result
         assert 'tokens -->' not in result
+
+    def test_no_task_returns_current_task_md(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        (repo / CONTEXT_DIR / 'CURRENT_TASK.md').write_text('# Task: previous task\n\nsome context\n')
+        result = srv.get_context()
+
+        assert '# Task: previous task' in result
+        assert 'some context' in result
+
+    def test_no_task_no_file_returns_guidance(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        result = srv.get_context()
+
+        assert 'No context loaded yet' in result
