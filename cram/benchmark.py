@@ -1,4 +1,26 @@
-"""cram benchmark — measure token savings for this repo."""
+"""cram benchmark — model the cache-write cost of each context-delivery strategy.
+
+cram's job is to minimise *cache writes* — the most expensive token class.
+A 5-minute-TTL cache write costs 1.25x base input; a cache read costs 0.1x.
+So the win is not "fewer tokens" — it's keeping an expensive shared prefix
+written ONCE and read cheaply thereafter, instead of re-writing it on every task.
+
+Two delivery strategies are compared:
+
+  Prefix injection (legacy --target claude)
+      The frozen context is rewritten into a prefix-loaded file (CLAUDE.md) on
+      every `cram task`. Because caching is a prefix match, each rewrite forces
+      a full re-WRITE of that content on the next request → N writes per session.
+
+  Stable prefix + tool result (MCP, recommended)
+      The frozen context (ARCHITECTURE/SYMBOLS/DECISIONS) stays byte-identical
+      across the session → written once, READ at 0.1x on every later request.
+      Per-task context is delivered as a tool result (message content), which
+      never invalidates the cached prefix.
+
+Token counts here are the rough len/4 heuristic — fine for relative comparison,
+not billing. For exact counts use the Anthropic token-counting endpoint.
+"""
 
 from __future__ import annotations
 import os
@@ -16,23 +38,35 @@ _SRC_EXTS = {
     '.java', '.md', '.json', '.toml', '.yaml', '.yml', '.html', '.css', '.rst',
 }
 
-# Claude pricing per 1M tokens (cache write / cache read)
-_PRICING = {
-    'Sonnet 4.6': (3.75,  0.30),
-    'Opus 4.8':   (18.75, 1.50),
-    'Haiku 4.5':  (0.30,  0.03),
+# Base input price per 1M tokens. Cache write = base x 1.25 (5-min TTL),
+# cache read = base x 0.1. (platform.claude.com pricing.)
+_MODELS: dict[str, float] = {
+    'Opus 4.8':   5.00,
+    'Sonnet 4.6': 3.00,
+    'Haiku 4.5':  1.00,
+}
+WRITE_MULT = 1.25   # 5-minute-TTL cache write
+READ_MULT  = 0.10   # cache read
+
+# Minimum cacheable prefix per model family. Below this nothing caches —
+# no write, but no read savings either, so the frozen layer must clear it.
+_CACHE_MIN: dict[str, int] = {
+    'Opus 4.8':   4096,
+    'Sonnet 4.6': 2048,
+    'Haiku 4.5':  4096,
 }
 
-# Cache minimum tokens by model family
-_CACHE_MIN = {
-    'opus':   4096,
-    'sonnet': 1024,
-    'haiku':  1024,
-}
+# How many `cram task` invocations a developer runs against one warm cache
+# before it expires. Override with AICONTEXT_TASKS_PER_SESSION.
+TASKS_PER_SESSION = int(os.environ.get('AICONTEXT_TASKS_PER_SESSION', '4'))
+
+# Frozen layer = the stable, cached prefix. Volatile layer = per-task payload.
+_FROZEN_FILES   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md')
+_VOLATILE_FILES = ('CURRENT_TASK.md',)
 
 
 def _count_repo_tokens(root: str) -> tuple[int, int]:
-    """Return (total_tokens, file_count) for all source files."""
+    """Return (total_tokens, file_count) for all source files. Kept for callers."""
     total, count = 0, 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
@@ -50,138 +84,112 @@ def _count_repo_tokens(root: str) -> tuple[int, int]:
     return total, count
 
 
-def _orientation_tokens(root: str, tree_tokens: int = 2_000) -> int:
-    """Estimate tokens for a minimal orientation set.
-
-    = file tree estimate + README + key config + 5 largest source files.
-    Represents what an AI tool loads before any user query.
-    """
-    total = tree_tokens
-    for name in ('README.md', 'README.rst', 'pyproject.toml', 'package.json'):
-        p = os.path.join(root, name)
-        if os.path.exists(p):
-            try:
-                with open(p, errors='ignore') as f:
-                    total += len(f.read()) // 4
-            except OSError:
-                pass
-    candidates: list[tuple[int, str]] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in _SKIP_DIRS and not d.startswith('.')
-        ]
-        for fname in filenames:
-            if os.path.splitext(fname)[1] in {'.py', '.ts', '.js', '.go', '.rs'}:
-                p = os.path.join(dirpath, fname)
-                try:
-                    candidates.append((os.path.getsize(p), p))
-                except OSError:
-                    pass
-    for _, p in sorted(candidates, reverse=True)[:5]:
-        try:
-            with open(p, errors='ignore') as f:
-                total += len(f.read()) // 4
-        except OSError:
-            pass
-    return total
-
-
-def _context_file_stats(context_dir: str) -> tuple[dict[str, tuple[int, int]], int]:
-    """Return ({filename: (lines, tokens)}, total_tokens)."""
-    files = ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', 'SYMBOLS.md']
-    result: dict[str, tuple[int, int]] = {}
-    total = 0
-    for fname in files:
+def _file_tokens(context_dir: str, names: tuple[str, ...]) -> dict[str, int]:
+    """Return {filename: tokens} for the named context files that exist."""
+    out: dict[str, int] = {}
+    for fname in names:
         p = os.path.join(context_dir, fname)
         if os.path.exists(p):
             try:
                 with open(p, errors='ignore') as f:
-                    content = f.read()
-                tokens = len(content) // 4
-                result[fname] = (content.count('\n'), tokens)
-                total += tokens
+                    out[fname] = len(f.read()) // 4
             except OSError:
                 pass
-    return result, total
+    return out
 
 
-def _bar(ratio: float, width: int = 28) -> str:
-    filled = round(ratio * width)
+def _bar(ratio: float, width: int = 24) -> str:
+    filled = max(0, min(width, round(ratio * width)))
     return '█' * filled + '░' * (width - filled)
 
 
 def run_benchmark(root: str) -> None:
-    repo_name = os.path.basename(root)
+    repo_name   = os.path.basename(root)
     context_dir = os.path.join(root, CONTEXT_DIR)
 
     if not os.path.isdir(context_dir):
-        print(
-            f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.",
-            file=sys.stderr,
-        )
+        print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
 
     print(f"\nBenchmarking {repo_name} ...", end='', flush=True)
-    full_tokens, file_count = _count_repo_tokens(root)
-    orient_tokens = _orientation_tokens(root)
-    ctx_stats, ctx_tokens = _context_file_stats(context_dir)
+    repo_tokens, file_count = _count_repo_tokens(root)
+    frozen   = _file_tokens(context_dir, _FROZEN_FILES)
+    volatile = _file_tokens(context_dir, _VOLATILE_FILES)
     print(" done.\n")
 
-    col = 40
-    sep = '─' * 68
+    frozen_tok   = sum(frozen.values())
+    volatile_tok = sum(volatile.values())
+    n            = TASKS_PER_SESSION
+    sep          = '─' * 70
 
-    # ── Token summary ─────────────────────────────────────────────
-    print(f"  Repo: {repo_name}  ({file_count} source files)\n")
-    print(f"  {'':38}  {'Sonnet/session':>14}  {'Opus/session':>12}")
+    # ── Layers ────────────────────────────────────────────────────
+    print(f"  Repo: {repo_name}  ({file_count} source files, ~{repo_tokens:,} tokens)\n")
+    print("  Context layers")
+    print(f"  {sep}")
+    print(f"  Frozen prefix  (cached once, read thereafter)")
+    for fname in _FROZEN_FILES:
+        if fname in frozen:
+            print(f"    {fname:<18} ~{frozen[fname]:>7,} tok")
+    print(f"    {'= prefix total':<18} ~{frozen_tok:>7,} tok  "
+          f"{_bar(frozen_tok / max(repo_tokens, 1))} {frozen_tok / max(repo_tokens, 1) * 100:.1f}% of repo")
+    print(f"\n  Volatile context  (per task, delivered as a tool result)")
+    for fname in _VOLATILE_FILES:
+        if fname in volatile:
+            print(f"    {fname:<18} ~{volatile[fname]:>7,} tok")
+    print(f"  {sep}\n")
+
+    # ── Cache-write model ─────────────────────────────────────────
+    # Three scenarios, N tasks per warm-cache session:
+    #
+    #   1. No cram       → N writes of full repo  (model re-reads everything)
+    #   2. Prefix inject → N writes of frozen_tok (CLAUDE.md rewritten each task)
+    #   3. MCP delivery  → 1 write + (N-1) reads  (frozen prefix cached)
+    #
+    # The volatile per-task payload (CURRENT_TASK.md) rides as a tool result
+    # on path 3 — it never invalidates the cached prefix.
+
+    nocram_writes = n * repo_tokens
+    inj_writes    = n * frozen_tok
+    stable_writes = frozen_tok
+    stable_reads  = (n - 1) * frozen_tok
+
+    print(f"  Cache-write model  ·  {n} tasks per warm cache  ·  5-min TTL\n")
+    print(f"  {'':<28}{'cache writes':>16}{'$/session':>13}{'$/100 sessions':>17}")
     print(f"  {sep}")
 
-    def cost_row(label: str, tokens: int) -> None:
-        s_write = tokens / 1_000_000 * 3.75
-        o_write = tokens / 1_000_000 * 18.75
-        bar = _bar(min(tokens / max(full_tokens, 1), 1.0))
-        print(f"  {label:<38}  ${s_write:>13.3f}  ${o_write:>11.3f}")
+    for model, base in _MODELS.items():
+        write_price  = base * WRITE_MULT / 1_000_000
+        read_price   = base * READ_MULT  / 1_000_000
+        nocram_cost  = nocram_writes  * write_price
+        inj_cost     = inj_writes     * write_price
+        stable_cost  = stable_writes  * write_price + stable_reads * read_price
+        print(f"  {model}")
+        print(f"    {'1. no cram (auto-index)':<26}{nocram_writes:>16,}{nocram_cost:>12.3f} "
+              f"{nocram_cost * 100:>16.2f}")
+        print(f"    {'2. cram prefix-injected':<26}{inj_writes:>16,}{inj_cost:>12.3f} "
+              f"{inj_cost * 100:>16.2f}")
+        print(f"    {'3. cram MCP-delivered':<26}{stable_writes:>16,}{stable_cost:>12.3f} "
+              f"{stable_cost * 100:>16.2f}")
+        mcp_vs_nocram = nocram_cost - stable_cost
+        mcp_vs_inj    = inj_cost    - stable_cost
+        print(f"    {'→ MCP vs no-cram':<26}{'':>16}{mcp_vs_nocram:>12.3f} "
+              f"{mcp_vs_nocram * 100:>16.2f}  saved")
+        print(f"    {'→ MCP vs injected':<26}{'':>16}{mcp_vs_inj:>12.3f} "
+              f"{mcp_vs_inj * 100:>16.2f}  saved")
+        print()
 
-    cost_row(f"Without cram — full repo ({full_tokens:,} tokens)", full_tokens)
-    cost_row(f"Without cram — orientation ({orient_tokens:,} tokens)", orient_tokens)
-    cost_row(f"With cram — context ({ctx_tokens:,} tokens)", ctx_tokens)
     print(f"  {sep}")
+    print(f"  Frozen prefix:  {frozen_tok:,} tok  ({frozen_tok / max(repo_tokens,1) * 100:.1f}% of repo)")
+    print(f"  Per-task payload (tool result, never cache-written): ~{volatile_tok:,} tok\n")
 
-    reduction_full   = (1 - ctx_tokens / max(full_tokens, 1)) * 100
-    reduction_orient = (1 - ctx_tokens / max(orient_tokens, 1)) * 100
-    save_s = (full_tokens - ctx_tokens) / 1_000_000 * 3.75
-    save_o = (full_tokens - ctx_tokens) / 1_000_000 * 18.75
-
-    print(f"\n  Token reduction vs full repo:   {reduction_full:.1f}%")
-    print(f"  Token reduction vs orientation: {reduction_orient:.1f}%")
-    print(f"  Saving per session:   ${save_s:.3f} (Sonnet)  ${save_o:.3f} (Opus)")
-    print(f"  Saving over 100 sessions:  ~${save_s*100:.0f} (Sonnet)  ~${save_o*100:.0f} (Opus)")
-
-    # ── Visual bar ────────────────────────────────────────────────
-    print()
-    w = 50
-    full_bar   = '█' * w
-    orient_bar = '█' * round(orient_tokens / max(full_tokens, 1) * w)
-    ctx_bar    = '█' * max(round(ctx_tokens  / max(full_tokens, 1) * w), 1)
-    print(f"  Full repo   {full_bar} {full_tokens:,}")
-    print(f"  Orientation {orient_bar:<{w}} {orient_tokens:,}")
-    print(f"  Cram        {ctx_bar:<{w}} {ctx_tokens:,}")
-
-    # ── Context file breakdown ────────────────────────────────────
-    print(f"\n  Context file breakdown:")
-    for fname, (lines, tokens) in ctx_stats.items():
-        bar = _bar(tokens / max(ctx_tokens, 1), width=16)
-        print(f"    {fname:<26}  {lines:>4} lines  {tokens:>6,} tok  {bar}")
-
-    # ── Cache minimum check ───────────────────────────────────────
-    print(f"\n  Cache minimum check:")
-    for family, min_tok in _CACHE_MIN.items():
-        ok = ctx_tokens >= min_tok
-        mark = '✓' if ok else '✗'
-        note = '' if ok else f'  ← increase AICONTEXT_MAX_EXCERPT_LINES'
-        label = family.capitalize()
-        print(f"    {mark} {label:<8} ({min_tok:,} tokens minimum){note}")
-
+    # ── Cache-minimum check (frozen layer must be cacheable) ──────
+    print("  Cacheable-prefix check  (frozen layer must clear the minimum)")
+    for model, _ in _MODELS.items():
+        floor = _CACHE_MIN[model]
+        ok    = frozen_tok >= floor
+        mark  = '✓' if ok else '✗'
+        note  = '' if ok else '  ← below minimum: prefix will NOT cache (sync more context)'
+        print(f"    {mark} {model:<12} needs ≥ {floor:,} tok{note}")
     print()
 
 
