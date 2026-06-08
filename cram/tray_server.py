@@ -479,9 +479,8 @@ def create_app(repo_path: str) -> Flask:
 
     @app.post('/quit')
     def quit_app():
-        func = request.environ.get('werkzeug.server.shutdown')
-        if func:
-            func()
+        import threading
+        threading.Timer(0.15, lambda: os._exit(0)).start()
         return jsonify({'success': True})
 
     # ── model discovery & settings ────────────────────────────────

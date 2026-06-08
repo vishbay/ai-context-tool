@@ -90,10 +90,8 @@ class _PopupAPI:
             _win[0].hide()
 
     def quit(self) -> None:
-        if _icon[0]:
-            _icon[0].stop()
-        if _win[0]:
-            _win[0].destroy()
+        import threading
+        threading.Timer(0.05, lambda: os._exit(0)).start()
 
     def set_size(self, height: int) -> None:
         if _win[0]:
