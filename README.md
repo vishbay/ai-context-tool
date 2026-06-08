@@ -2,6 +2,17 @@
 
 Stable context layer for AI coding tools — generated once by a cheap model, delivered cheaply on every session.
 
+## Install
+
+```bash
+# pip (MCP support required for Claude Code)
+pip install 'cram-ai[mcp]'
+
+# Homebrew (macOS)
+brew tap vishbay/cram-ai
+brew install cram-ai
+```
+
 ---
 
 ## What it does
@@ -32,7 +43,7 @@ Run `cram benchmark` to see the exact cost difference for your repo.
 ## Quick start
 
 ```bash
-pip install cram-ai
+pip install 'cram-ai[mcp]'
 
 cd your-repo
 cram init                  # one-time: scans repo, generates context files, installs git hook
@@ -156,6 +167,23 @@ The MCP path reduces cache-write cost ~20× vs no cram and ~4× vs prefix inject
 | `AICONTEXT_MAX_LINES` | `300` | Max lines per ARCHITECTURE.md |
 | `AICONTEXT_MAX_EXCERPT_LINES` | `80` | Max lines excerpted per file |
 | `CRAM_TASK_GRACE_SECONDS` | `600` | Seconds after `cram task` before a commit resets context |
+
+---
+
+## Upgrading from v0.1.0
+
+v0.2.0 changes the Claude Code delivery path from CLAUDE.md prefix injection to MCP tool results. This is the main behavioral change:
+
+| | v0.1.0 | v0.2.0 |
+|---|---|---|
+| Claude Code delivery | `cram task` writes context into `CLAUDE.md` | `get_context()` MCP tool, CLAUDE.md is a config pointer |
+| `cram task` | Writes to CLAUDE.md | Writes `CURRENT_TASK.md` only, prints MCP reminder |
+| `cram task --inject` | n/a | Restores old CLAUDE.md injection behavior |
+| Other tools (Cursor, Windsurf, etc.) | Unchanged | Unchanged |
+
+If you had `cram task` wired into a pre-session script:
+- **For Claude Code:** remove it. Use the MCP `get_context()` tool instead.
+- **For other tools:** keep it as-is, or add `--inject` if you want CLAUDE.md injection preserved.
 
 ---
 
