@@ -99,10 +99,11 @@ def get_context(task: str = '') -> str:
 
         arch      = _read('ARCHITECTURE.md')
         decisions = _read('DECISIONS.md')
+        gotchas   = _read('GOTCHAS.md')
         symbols   = _read('SYMBOLS.md')
 
         ctx_model, coding_model = get_model_recommendations()
-        file_entries = find_relevant_files(task, arch, decisions, symbols)
+        file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas)
 
         if not file_entries:
             return (
@@ -169,6 +170,21 @@ def get_decisions() -> str:
     content = _read('DECISIONS.md')
     if not content:
         return 'DECISIONS.md not found. Run `cram init` to create it.'
+    return content
+
+
+@mcp.tool()
+def get_gotchas() -> str:
+    """Get known non-obvious traps and foot-guns in this repo.
+
+    These are things that aren't visible from the code alone: silent side
+    effects, endpoints that bypass middleware, columns with surprising nullability,
+    patterns that look correct but break in production. Read before touching
+    unfamiliar areas.
+    """
+    content = _read('GOTCHAS.md')
+    if not content:
+        return 'GOTCHAS.md not found. Run `cram init` to create it, then add entries as you find them.'
     return content
 
 

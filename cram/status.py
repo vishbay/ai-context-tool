@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timezone
 
 CONTEXT_DIR = '.cram-ai-context'
-CONTEXT_FILES = ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']
+CONTEXT_FILES = ['ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'CURRENT_TASK.md', '.gitignore']
 
 
 def _mtime(path: str) -> datetime | None:
@@ -61,7 +61,7 @@ def get_status_dict(root: str = '.') -> dict:
     files: dict = {}
     stale = False
 
-    for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md'):
+    for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'CURRENT_TASK.md'):
         fpath = os.path.join(context_dir, fname)
         if not os.path.exists(fpath):
             continue

@@ -61,7 +61,7 @@ _CACHE_MIN: dict[str, int] = {
 TASKS_PER_SESSION = int(os.environ.get('AICONTEXT_TASKS_PER_SESSION', '4'))
 
 # Frozen layer = the stable, cached prefix. Volatile layer = per-task payload.
-_FROZEN_FILES   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md')
+_FROZEN_FILES   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md', 'GOTCHAS.md')
 _VOLATILE_FILES = ('CURRENT_TASK.md',)
 
 

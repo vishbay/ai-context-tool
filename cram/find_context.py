@@ -127,7 +127,7 @@ def _parse_file_line(raw: str) -> tuple[str, list[str]]:
 
 
 def find_relevant_files(
-    task: str, arch: str, decisions: str, symbols: str = '',
+    task: str, arch: str, decisions: str, symbols: str = '', gotchas: str = '',
 ) -> list[tuple[str, list[str]]]:
     """Ask the context model to identify relevant files + their key identifiers.
 
@@ -137,10 +137,12 @@ def find_relevant_files(
         f"Symbol index (file → public identifiers):\n{symbols}\n\n"
         if symbols else ''
     )
+    gotchas_section = f"Known gotchas:\n{gotchas}\n\n" if gotchas else ''
     prompt = (
         f"Repo architecture:\n{arch}\n\n"
         f"{symbols_section}"
         f"Decisions:\n{decisions}\n\n"
+        f"{gotchas_section}"
         f'Task: "{task}"\n\n'
         f"List ONLY the files DIRECTLY needed to complete this task.\n"
         f"For each file, include the specific identifiers (functions/classes) most relevant to the task.\n"
@@ -235,6 +237,7 @@ def find_context(task: str, target: str | None = None, inject: bool = False) -> 
 
     arch      = _read_context_file('ARCHITECTURE.md')
     decisions = _read_context_file('DECISIONS.md')
+    gotchas   = _read_context_file('GOTCHAS.md')
     symbols   = _read_context_file('SYMBOLS.md')
 
     if not arch:
@@ -261,7 +264,7 @@ def find_context(task: str, target: str | None = None, inject: bool = False) -> 
     print(f"[2/4] Identifying relevant files via {ctx_model} ...")
     sys.stdout.flush()
 
-    file_entries = find_relevant_files(task, arch, decisions, symbols)
+    file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas)
     found_entries = [(f, ids) for f, ids in file_entries if os.path.exists(f)]
     missing       = [f for f, _ in file_entries if not os.path.exists(f)]
 

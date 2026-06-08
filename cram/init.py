@@ -134,6 +134,18 @@ DECISIONS_TEMPLATE = """\
 - **Alternatives considered:** What else was weighed
 """
 
+GOTCHAS_TEMPLATE = """\
+# Gotchas
+
+Non-obvious traps in this codebase that grep can't tell you. Add entries when something burns you.
+
+## [GOTCHA-001] Example
+- **File / area:** path/to/file.py or module name
+- **Trap:** What the surprising behaviour is
+- **Why it exists:** Root cause or history
+- **Safe pattern:** What to do instead
+"""
+
 CURRENT_TASK_TEMPLATE = """\
 # Current Task
 
@@ -171,6 +183,9 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     with open(os.path.join(context_dir, 'DECISIONS.md'), 'w') as f:
         f.write(DECISIONS_TEMPLATE)
 
+    with open(os.path.join(context_dir, 'GOTCHAS.md'), 'w') as f:
+        f.write(GOTCHAS_TEMPLATE)
+
     with open(os.path.join(context_dir, 'CURRENT_TASK.md'), 'w') as f:
         f.write(CURRENT_TASK_TEMPLATE)
 
@@ -185,7 +200,7 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     print(f"  CLAUDE.md  (MCP config pointer)")
 
     print(f"\nDone. Created .cram-ai-context/ with:")
-    for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', 'SYMBOLS.md', '.gitignore']:
+    for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'CURRENT_TASK.md', 'SYMBOLS.md', '.gitignore']:
         print(f"  .cram-ai-context/{fname}")
 
     if team:
@@ -194,10 +209,12 @@ def init_repo(target: str = '.', team: bool = False) -> None:
 
     print("\nNext steps:")
     print("  1. Review .cram-ai-context/ARCHITECTURE.md (edit if the summary is off)")
-    print(f"  2. Commit context so teammates get it automatically:")
+    print("  2. Edit .cram-ai-context/DECISIONS.md — add your team's invariants")
+    print("  3. Edit .cram-ai-context/GOTCHAS.md — add non-obvious traps (add more over time)")
+    print(f"  4. Commit context so teammates get it automatically:")
     print(f"       git add .cram-ai-context/ CLAUDE.md && git commit -m \"chore: init cram-ai\"")
-    print("  3. Add cram-ai to your .claude/settings.json (see CLAUDE.md for the snippet)")
-    print("  4. Call get_context(\"your task\") at the start of each session")
+    print("  5. Add cram-ai to your .claude/settings.json (see CLAUDE.md for the snippet)")
+    print("  6. Call get_context(\"your task\") at the start of each session")
     if not team:
         print("\nTip: run `cram init --team` to also generate a GitHub Actions workflow")
         print("     that keeps ARCHITECTURE.md fresh on every push.")

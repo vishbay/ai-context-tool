@@ -53,7 +53,7 @@ def main() -> None:
         if os.path.isdir(ctx):
             _row(True, f'{CONTEXT_DIR}/')
 
-            for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'SYMBOLS.md'):
+            for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'SYMBOLS.md'):
                 p = os.path.join(ctx, fname)
                 if os.path.exists(p) and os.path.getsize(p) > 0:
                     _row(True, f'  {fname}')
