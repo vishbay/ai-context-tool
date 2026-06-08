@@ -194,9 +194,13 @@ def create_app(repo_path: str) -> Flask:
 
         now = time.time()
         files: dict = {}
-        total_cram  = 0
+        total_cram = 0
+        frozen_tok = 0
 
-        for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md'):
+        _FROZEN   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md', 'GOTCHAS.md')
+        _VOLATILE = ('CURRENT_TASK.md',)
+
+        for fname in _FROZEN + _VOLATILE:
             path = os.path.join(cd, fname)
             if os.path.exists(path):
                 with open(path, errors='ignore') as f:
@@ -204,13 +208,27 @@ def create_app(repo_path: str) -> Flask:
                 tokens = len(content) // 4
                 total_cram += tokens
                 files[fname] = {'tokens': tokens, 'lines': content.count('\n')}
+                if fname in _FROZEN:
+                    frozen_tok += tokens
 
         repo_tokens = _estimate_repo_tokens(root())
         savings_pct = max(0, int((1 - total_cram / max(repo_tokens, 1)) * 100))
         cost_saved  = (repo_tokens - total_cram) / 1_000_000 * 3.75
 
+        # Daily developer cost estimates — Sonnet 4.6 pricing
+        # Model: 4 sessions/day, TASKS_PER_SESSION tasks each, 5-min TTL cache
+        #   No cram:  every task re-reads the full repo  → N×S writes/day
+        #   With cram MCP: 1 frozen write + (N-1) reads per session
+        _BASE  = 3.0 / 1_000_000   # Sonnet 4.6 base input price
+        _WRITE = _BASE * 1.25       # cache write multiplier
+        _READ  = _BASE * 0.10       # cache read multiplier
+        _S     = 4                  # sessions per day
+        _T     = int(os.environ.get('AICONTEXT_TASKS_PER_SESSION', '4'))
+        nocram_daily = _S * _T * repo_tokens * _WRITE
+        cram_daily   = _S * (frozen_tok * _WRITE + (_T - 1) * frozen_tok * _READ)
+        daily_saving = max(0.0, nocram_daily - cram_daily)
+
         task_path = os.path.join(cd, 'CURRENT_TASK.md')
-        # Prefer session.json timestamp; fall back to file mtime for older repos
         try:
             from cram.session import load_session
             sess = load_session(root())
@@ -233,6 +251,9 @@ def create_app(repo_path: str) -> Flask:
             'repo_tokens':   repo_tokens,
             'savings_pct':   savings_pct,
             'cost_saved':    round(cost_saved, 3),
+            'nocram_daily':  round(nocram_daily, 2),
+            'cram_daily':    round(cram_daily, 2),
+            'daily_saving':  round(daily_saving, 2),
             'files':         files,
             'last_task_age': last_task_age,
             'last_sync_age': last_sync_age,

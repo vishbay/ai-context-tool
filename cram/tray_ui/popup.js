@@ -318,12 +318,25 @@ async function fetchMetrics() {
       `${data.savings_pct}%`;
 
     document.getElementById('cost-saved').textContent =
-      `$${data.cost_saved.toFixed(3)}`;
+      data.daily_saving >= 1
+        ? `$${data.daily_saving.toFixed(2)}`
+        : `$${data.daily_saving.toFixed(3)}`;
 
-    document.getElementById('cram-tokens').textContent =
-      data.cram_tokens >= 1000
-        ? `${(data.cram_tokens / 1000).toFixed(1)}k`
-        : String(data.cram_tokens);
+    document.getElementById('nocram-daily').textContent =
+      data.nocram_daily >= 1
+        ? `$${data.nocram_daily.toFixed(2)}`
+        : `$${data.nocram_daily.toFixed(3)}`;
+
+    document.getElementById('cram-daily').textContent =
+      data.cram_daily >= 1
+        ? `$${data.cram_daily.toFixed(2)}`
+        : `$${data.cram_daily.toFixed(3)}`;
+
+    const repoTok = data.repo_tokens >= 1000
+      ? `${(data.repo_tokens / 1000).toFixed(0)}k`
+      : String(data.repo_tokens);
+    document.getElementById('daily-est-line').textContent =
+      `repo: ~${repoTok} tok · 4 sessions × 4 tasks/day · Sonnet 4.6`;
 
     const parts = [];
     if (data.last_task_age) parts.push(`task: ${data.last_task_age} ago`);

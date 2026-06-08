@@ -453,7 +453,7 @@ select:focus { border-color: var(--accent); color: var(--text); }
 
 .metric-value {
   font-family: var(--mono);
-  font-size: 19px; font-weight: 700;
+  font-size: 15px; font-weight: 700;
   letter-spacing: -0.5px;
   color: var(--accent); line-height: 1.2;
 }

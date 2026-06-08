@@ -117,23 +117,29 @@
 
   <!-- Metrics -->
   <div class="metrics collapsible">
-    <div class="metric-heading">Cache write savings vs no cram</div>
+    <div class="metric-heading">Estimated savings vs no cram · Sonnet 4.6</div>
     <div class="metric-row">
       <div class="metric-block">
         <div class="metric-value" id="savings-pct">—</div>
-        <div class="metric-label">saved</div>
+        <div class="metric-label">tokens saved</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="nocram-daily">—</div>
+        <div class="metric-label">without cram / day</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="cram-daily">—</div>
+        <div class="metric-label">with cram / day</div>
       </div>
       <div class="metric-divider"></div>
       <div class="metric-block">
         <div class="metric-value" id="cost-saved">—</div>
-        <div class="metric-label">per session</div>
-      </div>
-      <div class="metric-divider"></div>
-      <div class="metric-block">
-        <div class="metric-value" id="cram-tokens">—</div>
-        <div class="metric-label">tokens</div>
+        <div class="metric-label">saved / day</div>
       </div>
     </div>
+    <div class="metric-sub" id="daily-est-line"></div>
     <div class="metric-sub" id="last-task-line"></div>
   </div>
 
