@@ -12,15 +12,27 @@
 
   <!-- Header -->
   <header id="header">
-    <div class="header-left">
-      <div class="logo-group">
-        <span class="logo">cram-ai</span>
-        <span class="tagline">cram your context away.</span>
-      </div>
-      <span id="badge" class="badge">…</span>
+    <div class="logo-group">
+      <svg class="logo-mark" width="17" height="17" viewBox="0 0 17 17" fill="none">
+        <path d="M8.5 1.5A7 7 0 0 1 15.5 8.5" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M8.5 15.5A7 7 0 0 1 1.5 8.5" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <span class="logo">cram<span class="logo-suffix">·ai</span></span>
     </div>
     <div class="header-right">
-      <button class="icon-btn" onclick="toggleHelp()" title="Guide">?</button>
+      <span id="badge" class="badge">…</span>
+      <button class="icon-btn" onclick="toggleHelp()" title="Guide & settings">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M5.5 5.5C5.5 4.67 6.17 4 7 4s1.5.67 1.5 1.5c0 .75-.5 1.3-1 1.6V8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+          <circle cx="7" cy="10" r=".75" fill="currentColor"/>
+        </svg>
+      </button>
+      <button class="icon-btn close-btn" onclick="cramClose()" title="Close">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
     </div>
   </header>
 
@@ -33,14 +45,19 @@
   <!-- Repo selector -->
   <div id="repo-bar" class="repo-bar collapsible">
     <button class="repo-trigger" id="repo-trigger" onclick="toggleRepoDropdown()">
+      <svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="flex-shrink:0;opacity:.5">
+        <path d="M2.5 1v9M8.5 1v4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+        <circle cx="8.5" cy="8" r="2" stroke="currentColor" stroke-width="1.25" fill="none"/>
+        <path d="M2.5 5h3" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+      </svg>
       <span id="repo-name">—</span>
-      <span id="repo-arrow" class="repo-arrow">▾</span>
+      <svg id="repo-arrow" class="repo-arrow" width="9" height="6" viewBox="0 0 9 6" fill="none">
+        <path d="M1 1l3.5 3.5L8 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
     </button>
     <div id="repo-dropdown" class="repo-dropdown hidden">
       <div id="recent-repos-list"></div>
-      <button class="repo-item repo-browse" onclick="cramBrowseRepo()">
-        Browse for repo…
-      </button>
+      <button class="repo-item repo-browse" onclick="cramBrowseRepo()">Browse for repo…</button>
     </div>
   </div>
 
@@ -52,37 +69,39 @@
 
     <!-- Auto-suggest bar -->
     <div id="suggest-bar" class="suggest-bar hidden">
+      <span class="suggest-spark">✦</span>
       <span id="suggest-text" class="suggest-text"></span>
       <div class="suggest-actions">
         <button class="suggest-use" onclick="useSuggestion()">Use</button>
         <button class="suggest-dismiss" onclick="hideSuggestion()" title="Dismiss">✕</button>
-        <button class="suggest-disable" onclick="disableSuggestion()" title="Turn off auto-suggest">off</button>
+        <button class="suggest-disable" onclick="disableSuggestion()" title="Turn off">off</button>
       </div>
     </div>
 
-    <div class="section-label">What are you building?</div>
-    <textarea
-      id="task-input"
-      placeholder="e.g. add OAuth login flow"
-      rows="2"
-      onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))cramTask()"
-    ></textarea>
-    <div class="task-controls">
-      <select id="target-select" title="Auto-load target">
-        <option value="cursor">cursor</option>
-        <option value="claude">claude</option>
-        <option value="copilot">copilot</option>
-        <option value="codex">codex</option>
-        <option value="windsurf">windsurf</option>
-        <option value="all">all</option>
-      </select>
-      <button id="cram-btn" class="btn-primary" onclick="cramTask()">Cram</button>
+    <div class="input-group">
+      <textarea
+        id="task-input"
+        placeholder="What are you building?"
+        rows="2"
+        onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))cramTask()"
+      ></textarea>
+      <div class="task-controls">
+        <select id="target-select" title="Target AI tool">
+          <option value="cursor">cursor</option>
+          <option value="claude">claude</option>
+          <option value="copilot">copilot</option>
+          <option value="codex">codex</option>
+          <option value="windsurf">windsurf</option>
+          <option value="all">all</option>
+        </select>
+        <button id="cram-btn" class="btn-primary" onclick="cramTask()">Cram</button>
+      </div>
     </div>
   </div>
 
   <!-- Not-initialised prompt -->
   <div id="init-section" class="collapsible">
-    <p class="init-msg">No <code>.cram-ai-context/</code> found in this directory.</p>
+    <p class="init-msg">No <code>.cram-ai-context/</code> found here.</p>
     <button class="btn-primary wide" onclick="cramInit()">Run cram init</button>
   </div>
 
@@ -110,29 +129,29 @@
   <!-- Activity log -->
   <div class="output-wrap collapsible hidden" id="output-wrap">
     <div id="output" class="output"></div>
-    <button class="copy-log-btn" onclick="cramCopyLog()" title="Copy log">copy</button>
+    <button class="copy-log-btn" onclick="cramCopyLog()">copy</button>
   </div>
 
-  <!-- Workflow guide -->
+  <!-- Workflow guide / settings panel -->
   <div id="help-panel" class="help-panel collapsible hidden">
     <div class="help-title">How to use cram-ai</div>
     <ol class="help-steps">
       <li><code>cram init</code> — one-time setup per repo</li>
       <li>Set your task above <em>before</em> opening your AI tool</li>
-      <li>AI extension auto-loads the context — no copying needed</li>
+      <li>Context auto-loads — no copying needed</li>
       <li>One task per session; commit at a feature boundary</li>
-      <li><code>cram sync</code> runs automatically on git commit</li>
+      <li><code>cram sync</code> runs automatically on commit</li>
     </ol>
     <div class="help-tip">⌘↵ to submit · stale badge = run Sync</div>
     <div class="help-settings">
       <label class="setting-toggle">
         <input type="checkbox" id="auto-suggest-toggle"
           onchange="toggleAutoSuggest(this)" checked />
-        Auto-suggest task from branch name
+        Auto-suggest from branch name
       </label>
     </div>
     <div class="help-decide">
-      <div class="section-label">Log a decision</div>
+      <div class="help-section-label">Log a decision</div>
       <div class="decide-controls">
         <input id="decide-input" type="text"
           placeholder="e.g. use Postgres not SQLite"
@@ -145,12 +164,39 @@
 
   <!-- Footer -->
   <footer class="collapsible">
-    <button class="footer-btn" id="continue-btn"   onclick="cramContinue()"  title="Extend session grace period">↩</button>
-    <button class="footer-btn" id="sync-btn"        onclick="cramSync()"      title="Sync ARCHITECTURE.md">↺ Sync</button>
-    <button class="footer-btn" id="benchmark-btn"   onclick="cramBenchmark()" title="Show token savings">Bench</button>
-    <button class="footer-btn" id="status-run-btn"  onclick="cramStatus()"    title="Check context status">Status</button>
-    <button class="footer-btn"                       onclick="cramOpenFolder()" title="Open context folder">📁</button>
-    <button class="footer-btn danger"               onclick="cramQuit()"      title="Quit cram-ai">⏻</button>
+    <button class="footer-btn" id="continue-btn" onclick="cramContinue()" title="Extend session" data-label="extend">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M10.5 4.5H5.5C3.84 4.5 2.5 5.84 2.5 7.5s1.34 3 3 3h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M8.5 2.5l2 2-2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button class="footer-btn" id="sync-btn" onclick="cramSync()" title="Sync architecture" data-label="sync">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M13 7.5A5.5 5.5 0 1 1 7.5 2m0 0 2.5 2.5M7.5 2 5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+    </button>
+    <button class="footer-btn" id="benchmark-btn" onclick="cramBenchmark()" title="Benchmark" data-label="bench">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M9 2L5.5 8h4L6 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button class="footer-btn" id="status-run-btn" onclick="cramStatus()" title="Check status" data-label="status">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" stroke-width="1.3"/>
+        <circle cx="7.5" cy="7.5" r="2" fill="currentColor"/>
+      </svg>
+    </button>
+    <button class="footer-btn" onclick="cramOpenFolder()" title="Open context folder" data-label="folder">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M1.5 5.5C1.5 4.67 2.17 4 3 4h3.5L8 5.5h4c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5V5.5z" stroke="currentColor" stroke-width="1.3" fill="none"/>
+      </svg>
+    </button>
+    <button class="footer-btn danger" onclick="cramQuit()" title="Quit cram-ai" data-label="quit">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M7.5 2.5v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M5 4.3A5.5 5.5 0 1 0 10 4.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+      </svg>
+    </button>
   </footer>
 
 </div>

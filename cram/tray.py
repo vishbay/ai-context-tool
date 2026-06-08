@@ -9,12 +9,33 @@ Linux:  AppIndicator/xorg tray + GTK WebView (requires system tray support)
 """
 
 from __future__ import annotations
+import atexit
 import os
+import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+_PID_FILE = Path.home() / '.config' / 'cram-ai' / 'cram-menu.pid'
+
+
+def _acquire_instance_lock() -> bool:
+    """Return True if this process should proceed; False if another instance is running."""
+    if _PID_FILE.exists():
+        try:
+            pid = int(_PID_FILE.read_text().strip())
+            os.kill(pid, 0)  # signal 0 = existence check only
+            return False      # process is alive → another instance is running
+        except (ProcessLookupError, PermissionError):
+            pass  # stale PID — process is gone, safe to proceed
+        except (ValueError, OSError):
+            pass  # corrupt file
+    _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PID_FILE.write_text(str(os.getpid()))
+    atexit.register(lambda: _PID_FILE.unlink(missing_ok=True))
+    return True
 
 try:
     import pystray
@@ -133,7 +154,7 @@ def _pick_repo_native() -> str | None:
 
 
 _POPUP_W = 320   # must match body width in popup.css
-_POPUP_H = 520   # must match HEIGHT_FULL in popup.js
+_POPUP_H = 528   # must match HEIGHT_FULL in popup.js
 
 
 def _popup_position() -> tuple[int | None, int | None]:
@@ -285,6 +306,10 @@ def _build_menu(repo_path: str) -> pystray.Menu:
 
 
 def main() -> None:
+    if not _acquire_instance_lock():
+        print("cram menu is already running.", file=sys.stderr)
+        sys.exit(0)
+
     start = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     repo  = _find_git_root(start)
 
@@ -325,7 +350,7 @@ def main() -> None:
         hidden=True,
         js_api=_PopupAPI(repo),
         min_size=(_POPUP_W, 360),
-        background_color='#f2f2f7',
+        background_color='#111115',
         **pos_kwargs,
     )
 

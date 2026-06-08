@@ -6,9 +6,9 @@ const output     = document.getElementById('output');
 const outputWrap = document.getElementById('output-wrap');
 
 // Heights used when resizing via pywebview API
-const HEIGHT_FULL    = 520;
+const HEIGHT_FULL    = 528;
 const HEIGHT_COMPACT = 52;
-const HEIGHT_HELP    = 720;
+const HEIGHT_HELP    = 728;
 const _SUGGEST_H     = 44;  // extra height when suggest bar is visible
 
 // ── state helpers ─────────────────────────────────────────

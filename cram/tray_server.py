@@ -13,8 +13,24 @@ import sys
 import time
 from pathlib import Path
 
-# Always use the cram binary from the same venv as this interpreter
-_CRAM = str(Path(sys.executable).parent / 'cram')
+def _find_cram() -> str:
+    """Locate the cram CLI binary.
+
+    In a frozen .app bundle sys.executable is inside Contents/MacOS/ and has
+    no sibling cram script, so fall back to PATH.  In a normal venv the sibling
+    approach is fast and reliable.
+    """
+    import shutil
+    if not getattr(sys, 'frozen', False):
+        candidate = Path(sys.executable).parent / 'cram'
+        if candidate.exists():
+            return str(candidate)
+    found = shutil.which('cram')
+    if found:
+        return found
+    return 'cram'  # will surface a clear FileNotFoundError at call time
+
+_CRAM = _find_cram()
 
 from flask import Flask, jsonify, request, send_from_directory
 
