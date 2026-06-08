@@ -10,13 +10,9 @@ GLOBAL_CLAUDE_MD    = os.path.expanduser('~/.claude/CLAUDE.md')
 _CRAM_SECTION_START = "<!-- cram-ai: start -->"
 _CRAM_SECTION_END   = "<!-- cram-ai: end -->"
 _GLOBAL_CLAUDE_MD_BLOCK = """\
-> **cram-ai is active on this machine.**
-> If this session lacks task-specific context, you may have opened Claude Code outside
-> a cram-initialized directory, or haven't run `cram task` yet.
->
-> - `.cram-ai-context/` must exist in your working directory (`cram init` to create it)
-> - Run `cram task "<description>"` before each session to load focused file context
-> - Run `cram doctor` to diagnose context issues
+> **cram-ai** — context is served via the MCP server.
+> Call get_context("your task") at the start of each session.
+> Run `cram doctor` if tools are missing.
 """
 
 

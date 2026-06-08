@@ -86,8 +86,9 @@ class TestFindRelevantFiles:
         mock_response = 'src/main.py\ncram/utils.py\n'
         with patch('cram.find_context.call_model', return_value=mock_response):
             result = find_relevant_files('add feature', '# Arch', '# Decisions')
-        assert 'src/main.py' in result
-        assert 'cram/utils.py' in result
+        paths = [f for f, _ in result]
+        assert 'src/main.py' in paths
+        assert 'cram/utils.py' in paths
 
     def test_strips_prose_from_response(self):
         mock_response = (
@@ -97,9 +98,10 @@ class TestFindRelevantFiles:
         )
         with patch('cram.find_context.call_model', return_value=mock_response):
             result = find_relevant_files('add feature', '', '')
-        assert 'src/main.py' in result
-        assert 'cram/utils.py' in result
-        assert any('Here' in p for p in result) is False
+        paths = [f for f, _ in result]
+        assert 'src/main.py' in paths
+        assert 'cram/utils.py' in paths
+        assert any('Here' in p for p in paths) is False
 
     def test_respects_max_files_limit(self, monkeypatch):
         import cram.find_context as fc

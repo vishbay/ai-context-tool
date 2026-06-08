@@ -6,7 +6,7 @@ import sys
 import time
 
 from cram.init import scan_structure
-from cram.utils import call_context_model, strip_code_fence
+from cram.utils import call_model, call_context_model, strip_code_fence
 from cram.symbols import write_symbols_md
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
@@ -49,7 +49,7 @@ def update_architecture_md(structure: str, diff: str, current: str) -> str:
         f"Recent git diff:\n{diff}\n\n"
         f"Return only the updated markdown, no explanation."
     )
-    return strip_code_fence(call_context_model(prompt))
+    return strip_code_fence(call_model(prompt))
 
 
 def reset_task(root: str) -> None:

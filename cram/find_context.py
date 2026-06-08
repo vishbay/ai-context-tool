@@ -6,6 +6,7 @@ import re
 import sys
 
 from cram.utils import (
+    call_model,
     call_context_model,
     cache_min_tokens,
     get_model_recommendations,
@@ -15,6 +16,7 @@ from cram import targets as _targets
 
 MAX_FILES         = int(os.environ.get('AICONTEXT_MAX_FILES',        '5'))
 MAX_EXCERPT_LINES = int(os.environ.get('AICONTEXT_MAX_EXCERPT_LINES', '80'))
+MAX_LINES         = MAX_EXCERPT_LINES  # alias kept for test compatibility
 
 CONTEXT_DIR = '.cram-ai-context'
 
@@ -28,6 +30,16 @@ def _read_context_file(filename: str) -> str:
         return ''
     with open(path) as f:
         return f.read()
+
+
+def _read_truncated(path: str) -> str:
+    """Read a file, truncating to MAX_LINES lines if needed."""
+    with open(path, errors='ignore') as f:
+        lines = f.readlines()
+    if len(lines) > MAX_LINES:
+        omitted = len(lines) - MAX_LINES
+        return ''.join(lines[:MAX_LINES]) + f'\n... [{omitted} lines omitted]\n'
+    return ''.join(lines)
 
 
 def _resolve_path(raw: str, root: str = '.') -> str:
@@ -115,7 +127,7 @@ def _parse_file_line(raw: str) -> tuple[str, list[str]]:
 
 
 def find_relevant_files(
-    task: str, arch: str, decisions: str, symbols: str,
+    task: str, arch: str, decisions: str, symbols: str = '',
 ) -> list[tuple[str, list[str]]]:
     """Ask the context model to identify relevant files + their key identifiers.
 
@@ -141,7 +153,7 @@ def find_relevant_files(
         f"  relative/path/to/file.ext | RelevantFunc, AnotherClass\n"
         f"If no specific identifiers match, output path only. No explanation."
     )
-    raw_lines = call_context_model(prompt).strip().splitlines()
+    raw_lines = call_model(prompt).strip().splitlines()
 
     results: list[tuple[str, list[str]]] = []
     for raw in raw_lines:
@@ -174,13 +186,18 @@ def _arch_summary(arch: str, max_lines: int = 25) -> str:
 
 def populate_current_task(
     task: str,
-    file_entries: list[tuple[str, list[str]]],
+    file_entries,  # list[str] or list[tuple[str, list[str]]]
     ctx_model: str = '',
     coding_model: str = '',
 ) -> list[str]:
     """Write CURRENT_TASK.md with identifier-focused excerpts. Returns files inlined."""
-    found   = [(f, ids) for f, ids in file_entries if os.path.exists(f)]
-    missing = [f for f, _ in file_entries if not os.path.exists(f)]
+    # Normalize: accept both plain string paths and (path, identifiers) tuples
+    normalized = [
+        (e, []) if isinstance(e, str) else e
+        for e in file_entries
+    ]
+    found   = [(f, ids) for f, ids in normalized if os.path.exists(f)]
+    missing = [f for f, _ in normalized if not os.path.exists(f)]
 
     with open(os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md'), 'w') as out:
         out.write(f"# Current Task\n\n## Task\n{task}\n\n")

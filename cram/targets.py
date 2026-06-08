@@ -14,6 +14,22 @@ CONTEXT_DIR = '.cram-ai-context'
 CRAM_SECTION_START = "<!-- cram-ai: start -->"
 CRAM_SECTION_END   = "<!-- cram-ai: end -->"
 
+# Written to CLAUDE.md instead of injecting task content.
+# Keeps the prefix tiny — real context comes from get_context() via MCP.
+CLAUDE_MCP_POINTER = (
+    "cram-ai context is served via the MCP server — not this file.\n\n"
+    "Add cram-ai to your .claude/settings.json:\n"
+    "  {\n"
+    '    "mcpServers": {\n'
+    '      "cram-ai": {\n'
+    '        "command": "cram",\n'
+    '        "args": ["mcp", "--repo", "/absolute/path/to/this/repo"]\n'
+    "      }\n"
+    "    }\n"
+    "  }\n\n"
+    'Then call get_context("your task") at the start of each session.'
+)
+
 # Each entry is a cram-owned file the tool reads automatically.
 # cram overwrites it on every `cram task` run — no shared config is ever touched.
 TARGET_FILES: dict[str, str] = {
@@ -151,20 +167,30 @@ def _upsert_cram_section(path: str, inner_content: str) -> None:
             f.write(block)
 
 
-def write_to_target(root: str, target: str, task_content: str, arch_content: str = '') -> str:
-    """Write task context to the cram-owned section for this target. Returns the absolute path."""
+def write_to_target(root: str, target: str, task_content: str, arch_content: str = '',
+                    inject: bool = False) -> str:
+    """Write task context to the cram-owned section for this target. Returns the absolute path.
+
+    For the claude target, writes a pointer-only CLAUDE.md by default (inject=False).
+    Pass inject=True to write task_content instead (backward compat for --inject flag).
+    """
     rel = TARGET_FILES.get(target)
     if not rel:
         raise ValueError(f"Unknown target '{target}'. Valid: {', '.join(TARGET_FILES)}")
 
     path = os.path.join(root, rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    content = _render(target, task_content, arch_content)
-    if target == 'claude':
-        _upsert_cram_section(path, content)
+
+    if target == 'claude' and not inject:
+        pointer = CLAUDE_MCP_POINTER.replace('/absolute/path/to/this/repo', root)
+        _upsert_cram_section(path, pointer)
     else:
-        with open(path, 'w') as f:
-            f.write(content)
+        content = _render(target, task_content, arch_content)
+        if target == 'claude':
+            _upsert_cram_section(path, content)
+        else:
+            with open(path, 'w') as f:
+                f.write(content)
     return path
 
 

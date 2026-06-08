@@ -2,7 +2,7 @@
   "mcpServers": {
     "cram-ai": {
       "command": "cram",
-      "args": ["mcp"]
+      "args": ["mcp", "--repo", "/Users/vishbay/cram-ai"]
     }
   }
 }
