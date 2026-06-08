@@ -20,6 +20,9 @@ def main():
     except Exception:
         sys.exit(0)
 
+    # Extract task name — two formats:
+    #   Active:  "# Task: <description>" (set by cram task / MCP)
+    #   Reset:   "# Current Task\n\n## Task\n<!-- Session ended... -->"
     task = ''
     for line in content.split('\n'):
         s = line.strip()
@@ -27,10 +30,11 @@ def main():
             task = s[len('# Task:'):].strip()
             break
 
-    note = 'cram context loaded'
-    if task:
-        note += f': {task}'
+    # Skip injection when no active task (placeholder-only content)
+    if not task:
+        sys.exit(0)
 
+    note = f'cram context loaded: {task}'
     print(json.dumps({
         'additionalContext': content,
         'systemMessage': note,
