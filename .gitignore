@@ -6,4 +6,8 @@ build/
 .venv/
 venv/
 .env
+.DS_Store
 .ai-context/CURRENT_TASK.md
+.cram-ai-context/CURRENT_TASK.md
+.vscode/
+.claude/settings.local.json

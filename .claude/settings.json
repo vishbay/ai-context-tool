@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cram-ai": {
+      "command": "cram",
+      "args": ["mcp"]
+    }
+  }
+}

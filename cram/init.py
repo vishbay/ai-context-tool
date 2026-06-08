@@ -5,7 +5,8 @@ import sys
 import fnmatch
 
 from cram.utils import call_model, strip_code_fence
-from cram.hooks import install_hook, install_checkout_hook
+from cram.hooks import install_hook, install_checkout_hook, install_global_claude_md
+from cram.symbols import write_symbols_md
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
@@ -68,7 +69,57 @@ def generate_architecture_md(structure: str) -> str:
 def write_gitignore(context_dir: str) -> None:
     path = os.path.join(context_dir, '.gitignore')
     with open(path, 'w') as f:
-        f.write("CURRENT_TASK.md\n")
+        f.write("CURRENT_TASK.md\nsession.json\n")
+
+
+_CI_WORKFLOW = """\
+name: cram sync
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install cram-ai
+        run: pip install cram-ai
+
+      - name: Sync context
+        run: cram sync
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Commit updated context
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .cram-ai-context/
+          git diff --staged --quiet || git commit -m "chore: sync cram-ai context [skip ci]"
+          git push
+"""
+
+
+def write_ci_action(repo_root: str) -> None:
+    workflows_dir = os.path.join(repo_root, '.github', 'workflows')
+    os.makedirs(workflows_dir, exist_ok=True)
+    dest = os.path.join(workflows_dir, 'cram-sync.yml')
+    if os.path.exists(dest):
+        print(f"  .github/workflows/cram-sync.yml already exists — skipping.")
+        return
+    with open(dest, 'w') as f:
+        f.write(_CI_WORKFLOW)
+    print(f"  .github/workflows/cram-sync.yml")
 
 
 DECISIONS_TEMPLATE = """\
@@ -93,7 +144,7 @@ CURRENT_TASK_TEMPLATE = """\
 """
 
 
-def init_repo(target: str = '.') -> None:
+def init_repo(target: str = '.', team: bool = False) -> None:
     root = os.path.abspath(target)
     context_dir = os.path.join(root, '.cram-ai-context')
 
@@ -112,6 +163,10 @@ def init_repo(target: str = '.') -> None:
     with open(os.path.join(context_dir, 'ARCHITECTURE.md'), 'w') as f:
         f.write(architecture)
 
+    print("Building symbol index ...")
+    _, sym_count = write_symbols_md(root)
+    print(f"  {sym_count} identifiers indexed")
+
     with open(os.path.join(context_dir, 'DECISIONS.md'), 'w') as f:
         f.write(DECISIONS_TEMPLATE)
 
@@ -122,17 +177,40 @@ def init_repo(target: str = '.') -> None:
 
     install_hook(root)
     install_checkout_hook(root)
+    install_global_claude_md()
 
     print(f"\nDone. Created .cram-ai-context/ with:")
-    for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', '.gitignore']:
+    for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'CURRENT_TASK.md', 'SYMBOLS.md', '.gitignore']:
         print(f"  .cram-ai-context/{fname}")
-    print("\nNext: review ARCHITECTURE.md and run `cram task \"<your task>\"` before a coding session.")
+
+    if team:
+        print("\nCreating CI workflow:")
+        write_ci_action(root)
+
+    print("\nNext steps:")
+    print("  1. Review .cram-ai-context/ARCHITECTURE.md (edit if the summary is off)")
+    print(f"  2. Commit context so teammates get it automatically:")
+    print(f"       git add .cram-ai-context/ && git commit -m \"chore: init cram-ai\"")
+    print("  3. Run `cram task \"<your task>\"` before each coding session")
+    if not team:
+        print("\nTip: run `cram init --team` to also generate a GitHub Actions workflow")
+        print("     that keeps ARCHITECTURE.md fresh on every push.")
 
 
 def main() -> None:
+    import argparse
     from cram.utils import find_git_root
-    target = find_git_root(sys.argv[1] if len(sys.argv) > 1 else '.')
-    init_repo(target)
+
+    parser = argparse.ArgumentParser(prog='cram init',
+                                     description='One-time repo setup for cram-ai')
+    parser.add_argument('path', nargs='?', default=None,
+                        help='Repo path (defaults to git root of current directory)')
+    parser.add_argument('--team', action='store_true',
+                        help='Also create .github/workflows/cram-sync.yml for CI sync')
+    args = parser.parse_args()
+
+    target = find_git_root(args.path or '.')
+    init_repo(target, team=args.team)
 
 
 if __name__ == '__main__':

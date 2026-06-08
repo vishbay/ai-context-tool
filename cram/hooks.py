@@ -2,8 +2,75 @@
 
 from __future__ import annotations
 import os
+import re
 import stat
 import sys
+
+GLOBAL_CLAUDE_MD    = os.path.expanduser('~/.claude/CLAUDE.md')
+_CRAM_SECTION_START = "<!-- cram-ai: start -->"
+_CRAM_SECTION_END   = "<!-- cram-ai: end -->"
+_GLOBAL_CLAUDE_MD_BLOCK = """\
+> **cram-ai is active on this machine.**
+> If this session lacks task-specific context, you may have opened Claude Code outside
+> a cram-initialized directory, or haven't run `cram task` yet.
+>
+> - `.cram-ai-context/` must exist in your working directory (`cram init` to create it)
+> - Run `cram task "<description>"` before each session to load focused file context
+> - Run `cram doctor` to diagnose context issues
+"""
+
+
+def _upsert_global_section(path: str, inner_content: str) -> None:
+    block = f"{_CRAM_SECTION_START}\n{inner_content.rstrip()}\n{_CRAM_SECTION_END}\n"
+    if os.path.exists(path):
+        existing = open(path).read()
+        if _CRAM_SECTION_START in existing:
+            updated = re.sub(
+                rf'{re.escape(_CRAM_SECTION_START)}.*?{re.escape(_CRAM_SECTION_END)}',
+                block.rstrip('\n'),
+                existing,
+                flags=re.DOTALL,
+            )
+            with open(path, 'w') as f:
+                f.write(updated)
+            return
+        sep = '\n\n' if existing.strip() else ''
+        with open(path, 'a') as f:
+            f.write(sep + block)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(block)
+
+
+def install_global_claude_md() -> bool:
+    """Upsert cram's warning block into ~/.claude/CLAUDE.md. Returns True if written."""
+    try:
+        _upsert_global_section(GLOBAL_CLAUDE_MD, _GLOBAL_CLAUDE_MD_BLOCK)
+        print(f"cram-ai session warning installed at {GLOBAL_CLAUDE_MD}")
+        return True
+    except OSError as e:
+        print(f"Warning: could not write {GLOBAL_CLAUDE_MD}: {e}", file=sys.stderr)
+        return False
+
+
+def uninstall_global_claude_md() -> None:
+    """Remove cram's block from ~/.claude/CLAUDE.md."""
+    if not os.path.exists(GLOBAL_CLAUDE_MD):
+        return
+    content = open(GLOBAL_CLAUDE_MD).read()
+    cleaned = re.sub(
+        rf'\n*{re.escape(_CRAM_SECTION_START)}.*?{re.escape(_CRAM_SECTION_END)}\n*',
+        '\n',
+        content,
+        flags=re.DOTALL,
+    ).strip()
+    if cleaned:
+        with open(GLOBAL_CLAUDE_MD, 'w') as f:
+            f.write(cleaned + '\n')
+    else:
+        os.remove(GLOBAL_CLAUDE_MD)
+    print(f"Removed cram-ai block from {GLOBAL_CLAUDE_MD}")
 
 HOOK_SCRIPT = """\
 #!/bin/sh
@@ -115,8 +182,10 @@ def main() -> None:
     path = find_git_root(args.path)
     if args.action == 'uninstall':
         uninstall_hook(path)
+        uninstall_global_claude_md()
     else:
         install_hook(path)
+        install_global_claude_md()
 
 
 if __name__ == '__main__':

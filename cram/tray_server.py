@@ -194,10 +194,16 @@ def create_app(repo_path: str) -> Flask:
         cost_saved  = (repo_tokens - total_cram) / 1_000_000 * 3.75
 
         task_path = os.path.join(cd, 'CURRENT_TASK.md')
-        last_task_age = (
-            _age_short(now - os.path.getmtime(task_path))
-            if os.path.exists(task_path) else None
-        )
+        # Prefer session.json timestamp; fall back to file mtime for older repos
+        try:
+            from cram.session import load_session
+            sess = load_session(root())
+            set_at = sess.get('set_at') if sess else None
+        except Exception:
+            set_at = None
+        if set_at is None and os.path.exists(task_path):
+            set_at = os.path.getmtime(task_path)
+        last_task_age = _age_short(now - set_at) if set_at else None
 
         arch_path = os.path.join(cd, 'ARCHITECTURE.md')
         last_sync_age = (
@@ -227,19 +233,34 @@ def create_app(repo_path: str) -> Flask:
         if not description:
             return jsonify({'success': False, 'error': 'description is required'}), 400
 
-        result = subprocess.run(
-            [_CRAM,'task', description, '--target', target],
-            cwd=root(), capture_output=True, text=True,
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'task', description, '--target', target],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            if success:
+                _branch_alert[0] = None
+                from cram.targets import save_default_target
+                save_default_target(root(), target)
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
         )
-        if result.returncode == 0:
-            _branch_alert[0] = None
-            from cram.targets import save_default_target
-            save_default_target(root(), target)
-        return jsonify({
-            'success': result.returncode == 0,
-            'output':  result.stdout,
-            'error':   result.stderr,
-        })
 
     @app.post('/notify-branch-switch')
     def notify_branch_switch():
@@ -262,27 +283,170 @@ def create_app(repo_path: str) -> Flask:
 
     @app.post('/sync')
     def run_sync():
-        result = subprocess.run(
-            [_CRAM,'sync'],
-            cwd=root(), capture_output=True, text=True,
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'sync'],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
         )
-        return jsonify({
-            'success': result.returncode == 0,
-            'output':  result.stdout,
-            'error':   result.stderr,
-        })
 
     @app.post('/init')
     def run_init():
-        result = subprocess.run(
-            [_CRAM,'init'],
-            cwd=root(), capture_output=True, text=True,
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'init'],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
         )
-        return jsonify({
-            'success': result.returncode == 0,
-            'output':  result.stdout,
-            'error':   result.stderr,
-        })
+
+    @app.post('/continue')
+    def run_continue():
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'continue'],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    @app.post('/decide')
+    def run_decide():
+        data     = request.get_json(silent=True) or {}
+        decision = (data.get('decision') or '').strip()
+        if not decision:
+            return jsonify({'success': False, 'error': 'decision is required'}), 400
+
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'decide', decision],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    @app.post('/benchmark')
+    def run_benchmark():
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'benchmark'],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    @app.post('/status-run')
+    def run_status_cmd():
+        def _stream():
+            import subprocess as _sp
+            proc = _sp.Popen(
+                [_CRAM, 'status'],
+                cwd=root(),
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    yield f"data: {json.dumps({'line': stripped})}\n\n"
+            proc.wait()
+            success = proc.returncode == 0
+            yield f"data: {json.dumps({'done': True, 'success': success})}\n\n"
+
+        from flask import Response, stream_with_context
+        return Response(
+            stream_with_context(_stream()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
 
     @app.post('/open-folder')
     def open_folder():
@@ -306,6 +470,14 @@ def create_app(repo_path: str) -> Flask:
 
     # ── model discovery & settings ────────────────────────────────
 
+    @app.get('/suggest')
+    def get_suggest():
+        from cram.utils import load_settings
+        if load_settings().get('auto_suggest', True) is False:
+            return jsonify({'suggestion': None})
+        from cram.suggest import suggest_task
+        return jsonify({'suggestion': suggest_task(root())})
+
     @app.get('/models')
     def get_models():
         from cram.utils import discover_models, load_settings, pick_context_model, pick_coding_model
@@ -328,7 +500,7 @@ def create_app(repo_path: str) -> Flask:
     def post_settings():
         from cram.utils import save_settings
         data = request.get_json(silent=True) or {}
-        allowed = {'context_model', 'coding_model', 'ollama_url', 'proxy'}
+        allowed = {'context_model', 'coding_model', 'ollama_url', 'proxy', 'auto_suggest'}
         save_settings({k: v for k, v in data.items() if k in allowed})
         return jsonify({'success': True})
 

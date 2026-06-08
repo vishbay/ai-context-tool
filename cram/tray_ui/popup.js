@@ -6,9 +6,10 @@ const output     = document.getElementById('output');
 const outputWrap = document.getElementById('output-wrap');
 
 // Heights used when resizing via pywebview API
-const HEIGHT_FULL    = 492;
-const HEIGHT_COMPACT = 48;
-const HEIGHT_HELP    = 632;
+const HEIGHT_FULL    = 520;
+const HEIGHT_COMPACT = 52;
+const HEIGHT_HELP    = 720;
+const _SUGGEST_H     = 44;  // extra height when suggest bar is visible
 
 // ── state helpers ─────────────────────────────────────────
 
@@ -18,7 +19,7 @@ function setState(state) {
 }
 
 function setBadge(text) {
-  badge.textContent = `● ${text}`;
+  badge.textContent = text;
 }
 
 function setHint(text, style = '') {
@@ -39,7 +40,7 @@ function updateHint(state, hasRecentTask) {
   }
 }
 
-const _MAX_LOG_LINES = 6;
+const _MAX_LOG_LINES = 12;
 
 function showOutput(text, isError = false) {
   const trimmed = text.trim();
@@ -99,8 +100,9 @@ function setLoading(btn, loading) {
 // ── window size helpers ───────────────────────────────────
 
 function _currentTargetHeight() {
-  const helpOpen = !document.getElementById('help-panel').classList.contains('hidden');
-  return helpOpen ? HEIGHT_HELP : HEIGHT_FULL;
+  const helpOpen     = !document.getElementById('help-panel').classList.contains('hidden');
+  const suggestShown = !document.getElementById('suggest-bar').classList.contains('hidden');
+  return (helpOpen ? HEIGHT_HELP : HEIGHT_FULL) + (suggestShown ? _SUGGEST_H : 0);
 }
 
 function _resizeTo(h) {
@@ -127,7 +129,7 @@ function cramExpandIfCompact() {
 
 // ── help panel ────────────────────────────────────────────
 
-function toggleHelp() {
+async function toggleHelp() {
   if (app.classList.contains('compact')) {
     cramExpand();
     return;
@@ -135,7 +137,16 @@ function toggleHelp() {
   const panel  = document.getElementById('help-panel');
   const isOpen = !panel.classList.contains('hidden');
   panel.classList.toggle('hidden');
-  _resizeTo(isOpen ? HEIGHT_FULL : HEIGHT_HELP);
+  _resizeTo(_currentTargetHeight());
+  if (!isOpen) {
+    // Sync the auto-suggest toggle with persisted setting
+    try {
+      const res = await fetch('/settings');
+      const s   = await res.json();
+      const tog = document.getElementById('auto-suggest-toggle');
+      if (tog) tog.checked = s.auto_suggest !== false;
+    } catch {}
+  }
 }
 
 // ── repo selector ─────────────────────────────────────────
@@ -229,6 +240,10 @@ async function cramBrowseRepo() {
 let _lastState = 'loading';
 let _hasRecentTask = false;
 
+// Auto-suggest state
+let _suggestionDismissed = false;
+let _currentSuggestion   = '';
+
 async function fetchStatus() {
   try {
     const res  = await fetch('/status');
@@ -236,6 +251,7 @@ async function fetchStatus() {
 
     if (data.branch_alert) {
       showBranchAlert(data.branch_alert);
+      _suggestionDismissed = false;  // new branch = fresh suggestion
     } else {
       hideBranchAlert();
     }
@@ -321,6 +337,35 @@ async function fetchMetrics() {
 async function refresh() {
   await Promise.all([fetchStatus(), fetchMetrics(), fetchRepo()]);
   updateHint(_lastState, _hasRecentTask);
+  fetchSuggestion();
+}
+
+// ── SSE stream reader ─────────────────────────────────────
+
+async function _readStream(url, body, onLine, onDone) {
+  const res = await fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let   buffer  = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+    for (const part of parts) {
+      if (!part.startsWith('data: ')) continue;
+      let payload;
+      try { payload = JSON.parse(part.slice(6)); } catch { continue; }
+      if (payload.line !== undefined) onLine(payload.line);
+      if (payload.done)               onDone(payload.success ?? false);
+    }
+  }
 }
 
 // ── actions ───────────────────────────────────────────────
@@ -334,30 +379,27 @@ async function cramTask() {
 
   const target = document.getElementById('target-select').value;
   const btn    = document.getElementById('cram-btn');
-  btn.dataset.idleText    = 'Cram it';
+  btn.dataset.idleText    = 'Cram';
   btn.dataset.loadingText = 'Cramming…';
   setLoading(btn, true);
 
   try {
-    const res  = await fetch('/task', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ description, target }),
-    });
-    const data = await res.json();
-
-    if (data.success) {
-      document.getElementById('task-input').value = '';
-      showOutput(data.output || 'Done.');
-      _hasRecentTask = true;
-      await fetchMetrics();
-      updateHint(_lastState, _hasRecentTask);
-    } else {
-      showOutput(data.error || 'Failed.', true);
-    }
+    await _readStream(
+      '/task',
+      { description, target },
+      line => showOutput(line),
+      async success => {
+        if (success) {
+          document.getElementById('task-input').value = '';
+          _hasRecentTask = true;
+          await fetchMetrics();
+          updateHint(_lastState, _hasRecentTask);
+        }
+        setLoading(btn, false);
+      },
+    );
   } catch (e) {
     showOutput(String(e), true);
-  } finally {
     setLoading(btn, false);
   }
 }
@@ -365,20 +407,22 @@ async function cramTask() {
 async function cramSync() {
   const btn = document.getElementById('sync-btn');
   btn.dataset.idleText    = '↺ Sync';
-  btn.dataset.loadingText = '↺ Syncing…';
+  btn.dataset.loadingText = '↺ …';
   setLoading(btn, true);
 
   try {
-    const res  = await fetch('/sync', { method: 'POST' });
-    const data = await res.json();
-    showOutput(
-      data.success ? 'ARCHITECTURE.md updated.' : (data.error || 'Sync failed.'),
-      !data.success,
+    await _readStream(
+      '/sync',
+      {},
+      line => showOutput(line),
+      async success => {
+        if (!success) showOutput('Sync failed.', true);
+        else await refresh();
+        setLoading(btn, false);
+      },
     );
-    if (data.success) await refresh();
   } catch (e) {
     showOutput(String(e), true);
-  } finally {
     setLoading(btn, false);
   }
 }
@@ -389,20 +433,182 @@ async function cramInit() {
   btn.textContent = 'Initialising…';
 
   try {
-    const res  = await fetch('/init', { method: 'POST' });
-    const data = await res.json();
-    if (data.success) {
-      showOutput(data.output || 'Done.');
-      await refresh();
-    } else {
-      showOutput(data.error || 'Init failed.', true);
-      btn.disabled    = false;
-      btn.textContent = 'Run cram init';
-    }
+    await _readStream(
+      '/init',
+      {},
+      line => showOutput(line),
+      async success => {
+        if (success) {
+          await refresh();
+        } else {
+          showOutput('Init failed.', true);
+          btn.disabled    = false;
+          btn.textContent = 'Run cram init';
+        }
+      },
+    );
   } catch (e) {
     showOutput(String(e), true);
     btn.disabled    = false;
     btn.textContent = 'Run cram init';
+  }
+}
+
+// ── auto-suggest ──────────────────────────────────────────
+
+async function fetchSuggestion() {
+  if (_suggestionDismissed) return;
+  if (document.getElementById('task-input').value.trim()) return;
+  try {
+    const res  = await fetch('/suggest');
+    const data = await res.json();
+    if (data.suggestion) showSuggestion(data.suggestion);
+  } catch {}
+}
+
+function showSuggestion(text) {
+  _currentSuggestion = text;
+  document.getElementById('suggest-text').textContent = text;
+  document.getElementById('suggest-bar').classList.remove('hidden');
+  _resizeTo(_currentTargetHeight());
+}
+
+function hideSuggestion() {
+  _suggestionDismissed = true;
+  document.getElementById('suggest-bar').classList.add('hidden');
+  _resizeTo(_currentTargetHeight());
+}
+
+function useSuggestion() {
+  if (_currentSuggestion) {
+    document.getElementById('task-input').value = _currentSuggestion;
+    document.getElementById('task-input').focus();
+  }
+  hideSuggestion();
+}
+
+async function disableSuggestion() {
+  hideSuggestion();
+  try {
+    await fetch('/settings', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ auto_suggest: false }),
+    });
+    const tog = document.getElementById('auto-suggest-toggle');
+    if (tog) tog.checked = false;
+  } catch {}
+}
+
+async function toggleAutoSuggest(checkbox) {
+  const enabled = checkbox.checked;
+  try {
+    await fetch('/settings', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ auto_suggest: enabled }),
+    });
+  } catch {}
+  if (!enabled) {
+    hideSuggestion();
+  } else {
+    _suggestionDismissed = false;
+    fetchSuggestion();
+  }
+}
+
+async function cramContinue() {
+  const btn = document.getElementById('continue-btn');
+  btn.dataset.idleText    = '↩';
+  btn.dataset.loadingText = '…';
+  setLoading(btn, true);
+
+  try {
+    await _readStream(
+      '/continue',
+      {},
+      line => showOutput(line),
+      async success => {
+        if (!success) showOutput('Continue failed.', true);
+        setLoading(btn, false);
+      },
+    );
+  } catch (e) {
+    showOutput(String(e), true);
+    setLoading(btn, false);
+  }
+}
+
+async function cramDecide() {
+  const text = document.getElementById('decide-input').value.trim();
+  if (!text) {
+    document.getElementById('decide-input').focus();
+    return;
+  }
+
+  const btn = document.getElementById('decide-btn');
+  btn.dataset.idleText    = 'Log';
+  btn.dataset.loadingText = '…';
+  setLoading(btn, true);
+
+  try {
+    await _readStream(
+      '/decide',
+      { decision: text },
+      line => showOutput(line),
+      async success => {
+        if (success) document.getElementById('decide-input').value = '';
+        else showOutput('Decide failed.', true);
+        setLoading(btn, false);
+      },
+    );
+  } catch (e) {
+    showOutput(String(e), true);
+    setLoading(btn, false);
+  }
+}
+
+async function cramBenchmark() {
+  const btn = document.getElementById('benchmark-btn');
+  btn.dataset.idleText    = 'Bench';
+  btn.dataset.loadingText = '…';
+  setLoading(btn, true);
+
+  try {
+    await _readStream(
+      '/benchmark',
+      {},
+      line => showOutput(line),
+      async success => {
+        if (!success) showOutput('Benchmark failed.', true);
+        setLoading(btn, false);
+      },
+    );
+  } catch (e) {
+    showOutput(String(e), true);
+    setLoading(btn, false);
+  }
+}
+
+async function cramStatus() {
+  const btn = document.getElementById('status-run-btn');
+  btn.dataset.idleText    = 'Status';
+  btn.dataset.loadingText = '…';
+  setLoading(btn, true);
+
+  try {
+    await _readStream(
+      '/status-run',
+      {},
+      line => showOutput(line),
+      async success => {
+        if (!success) showOutput('Status failed.', true);
+        setLoading(btn, false);
+      },
+    );
+  } catch (e) {
+    showOutput(String(e), true);
+    setLoading(btn, false);
   }
 }
 

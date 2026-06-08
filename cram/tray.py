@@ -76,7 +76,7 @@ class _PopupAPI:
 
     def set_size(self, height: int) -> None:
         if _win[0]:
-            _win[0].resize(280, int(height))
+            _win[0].resize(320, int(height))
 
     def browse_repo(self) -> str | None:
         """Open a native folder picker and return the chosen path (or None)."""
@@ -132,7 +132,8 @@ def _pick_repo_native() -> str | None:
     return None
 
 
-_POPUP_H = 492  # must match HEIGHT_FULL in popup.js
+_POPUP_W = 320   # must match body width in popup.css
+_POPUP_H = 520   # must match HEIGHT_FULL in popup.js
 
 
 def _popup_position() -> tuple[int | None, int | None]:
@@ -155,12 +156,12 @@ def _popup_position() -> tuple[int | None, int | None]:
                 mb = int(NSStatusBar.systemStatusBar().thickness())
             except Exception:
                 mb = 24
-            return (sw - 290, sh - mb - _POPUP_H)
+            return (sw - _POPUP_W - 10, sh - mb - _POPUP_H)
         elif sys.platform == 'win32':
             import ctypes
             sw = ctypes.windll.user32.GetSystemMetrics(0)
             sh = ctypes.windll.user32.GetSystemMetrics(1)
-            return (sw - 290, sh - _POPUP_H - 48)  # 48px = typical taskbar height
+            return (sw - _POPUP_W - 10, sh - _POPUP_H - 48)  # 48px = typical taskbar height
     except Exception:
         pass
     return (None, None)
@@ -317,14 +318,14 @@ def main() -> None:
     _win[0] = webview.create_window(
         'cram-ai',
         url=f'http://127.0.0.1:{_get_port()}/popup',
-        width=280,
-        height=492,
+        width=_POPUP_W,
+        height=_POPUP_H,
         frameless=True,
         on_top=True,
         hidden=True,
         js_api=_PopupAPI(repo),
-        min_size=(280, 320),
-        background_color='#0d0b17',
+        min_size=(_POPUP_W, 360),
+        background_color='#f2f2f7',
         **pos_kwargs,
     )
 

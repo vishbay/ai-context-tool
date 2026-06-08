@@ -5,13 +5,21 @@ import os
 import re
 import sys
 
-from cram.utils import call_context_model, get_model_recommendations, find_git_root as _find_git_root
+from cram.utils import (
+    call_context_model,
+    cache_min_tokens,
+    get_model_recommendations,
+    find_git_root as _find_git_root,
+)
 from cram import targets as _targets
 
 MAX_FILES         = int(os.environ.get('AICONTEXT_MAX_FILES',        '5'))
 MAX_EXCERPT_LINES = int(os.environ.get('AICONTEXT_MAX_EXCERPT_LINES', '80'))
 
 CONTEXT_DIR = '.cram-ai-context'
+
+
+# ── file helpers ──────────────────────────────────────────────────
 
 
 def _read_context_file(filename: str) -> str:
@@ -23,7 +31,6 @@ def _read_context_file(filename: str) -> str:
 
 
 def _resolve_path(raw: str, root: str = '.') -> str:
-    """Resolve a model-returned path to an actual file, handling missing dir prefixes."""
     if os.path.exists(raw):
         return raw
     _skip = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'dist', 'build'}
@@ -46,19 +53,11 @@ def _clean_path(line: str) -> str:
     return line
 
 
-def _task_keywords(task: str) -> list[str]:
-    """Extract meaningful keywords from a task description."""
-    stop = {
-        'fix', 'add', 'update', 'change', 'make', 'the', 'a', 'an', 'in',
-        'to', 'for', 'of', 'and', 'or', 'with', 'use', 'using', 'from',
-        'this', 'that', 'will', 'should', 'need', 'needs', 'get', 'set',
-    }
-    words = re.findall(r'[a-zA-Z][a-zA-Z0-9_-]*', task)
-    return list({w.lower() for w in words if len(w) >= 3 and w.lower() not in stop})
+# ── excerpt extraction ────────────────────────────────────────────
 
 
-def _extract_excerpt(fpath: str, keywords: list[str]) -> str:
-    """Return a keyword-focused excerpt of a file, or the full file if it's small."""
+def _extract_excerpt(fpath: str, identifiers: list[str]) -> str:
+    """Return an identifier-focused excerpt of a file, or the full file if small."""
     with open(fpath, errors='ignore') as f:
         lines = f.readlines()
 
@@ -66,12 +65,12 @@ def _extract_excerpt(fpath: str, keywords: list[str]) -> str:
     if total <= MAX_EXCERPT_LINES:
         return ''.join(lines)
 
-    if not keywords:
+    if not identifiers:
         omitted = total - MAX_EXCERPT_LINES
         return ''.join(lines[:MAX_EXCERPT_LINES]) + f'\n... [{omitted} lines omitted]\n'
 
-    kw_lower = [k.lower() for k in keywords]
-    window   = 12
+    kw_lower = [k.lower() for k in identifiers]
+    window   = 15
 
     matched: set[int] = set()
     for i, line in enumerate(lines):
@@ -100,35 +99,88 @@ def _extract_excerpt(fpath: str, keywords: list[str]) -> str:
     return ''.join(parts)
 
 
-def find_relevant_files(task: str, arch: str, decisions: str) -> list[str]:
+# ── file selection ────────────────────────────────────────────────
+
+
+def _parse_file_line(raw: str) -> tuple[str, list[str]]:
+    """Parse 'path/to/file.py | id1, id2' into (path, [id1, id2])."""
+    if '|' in raw:
+        path_part, id_part = raw.split('|', 1)
+        path = _clean_path(path_part)
+        ids  = [i.strip() for i in id_part.split(',') if i.strip()]
+    else:
+        path = _clean_path(raw)
+        ids  = []
+    return path, ids
+
+
+def find_relevant_files(
+    task: str, arch: str, decisions: str, symbols: str,
+) -> list[tuple[str, list[str]]]:
+    """Ask the context model to identify relevant files + their key identifiers.
+
+    Returns a list of (resolved_path, [identifier, ...]) tuples.
+    """
+    symbols_section = (
+        f"Symbol index (file → public identifiers):\n{symbols}\n\n"
+        if symbols else ''
+    )
     prompt = (
         f"Repo architecture:\n{arch}\n\n"
+        f"{symbols_section}"
         f"Decisions:\n{decisions}\n\n"
         f'Task: "{task}"\n\n'
-        f"List ONLY the files DIRECTLY needed to complete this task. Be conservative.\n"
+        f"List ONLY the files DIRECTLY needed to complete this task.\n"
+        f"For each file, include the specific identifiers (functions/classes) most relevant to the task.\n"
         f"Rules:\n"
-        f"- UI/styling/colour tasks → CSS and HTML files only, not Python backend\n"
-        f"- Backend/API tasks → Python files only, not UI assets\n"
-        f"- Logic/behaviour tasks → JS or relevant backend file\n"
-        f"- 1-3 files is almost always enough\n"
-        f"Max {MAX_FILES} files. One file path per line. No explanation, no bullets."
+        f"- UI/styling tasks → CSS and HTML files only\n"
+        f"- Backend/API tasks → Python/Go/etc files only\n"
+        f"- 1–3 files is almost always enough\n"
+        f"- Max {MAX_FILES} files\n\n"
+        f"Output format — one file per line:\n"
+        f"  relative/path/to/file.ext | RelevantFunc, AnotherClass\n"
+        f"If no specific identifiers match, output path only. No explanation."
     )
     raw_lines = call_context_model(prompt).strip().splitlines()
-    paths = [_clean_path(l) for l in raw_lines if l.strip()]
-    paths = [p for p in paths if p][:MAX_FILES]
-    return [_resolve_path(p) for p in paths]
+
+    results: list[tuple[str, list[str]]] = []
+    for raw in raw_lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        path, ids = _parse_file_line(raw)
+        if not path:
+            continue
+        resolved = _resolve_path(path)
+        results.append((resolved, ids))
+        if len(results) >= MAX_FILES:
+            break
+    return results
+
+
+# ── context assembly ──────────────────────────────────────────────
+
+
+def _arch_summary(arch: str, max_lines: int = 25) -> str:
+    """Extract the first max_lines non-blank lines of ARCHITECTURE.md."""
+    collected = []
+    for line in arch.splitlines():
+        if line.strip():
+            collected.append(line)
+        if len(collected) >= max_lines:
+            break
+    return '\n'.join(collected)
 
 
 def populate_current_task(
     task: str,
-    files: list[str],
+    file_entries: list[tuple[str, list[str]]],
     ctx_model: str = '',
     coding_model: str = '',
 ) -> list[str]:
-    """Write CURRENT_TASK.md with focused excerpts. Returns files actually inlined."""
-    found   = [f for f in files if os.path.exists(f)]
-    missing = [f for f in files if not os.path.exists(f)]
-    keywords = _task_keywords(task)
+    """Write CURRENT_TASK.md with identifier-focused excerpts. Returns files inlined."""
+    found   = [(f, ids) for f, ids in file_entries if os.path.exists(f)]
+    missing = [f for f, _ in file_entries if not os.path.exists(f)]
 
     with open(os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md'), 'w') as out:
         out.write(f"# Current Task\n\n## Task\n{task}\n\n")
@@ -148,12 +200,15 @@ def populate_current_task(
             out.write('\n')
 
         out.write("## Relevant Files\n")
-        for fpath in found:
+        for fpath, ids in found:
             ext     = os.path.splitext(fpath)[1].lstrip('.')
-            excerpt = _extract_excerpt(fpath, keywords)
+            excerpt = _extract_excerpt(fpath, ids)
             out.write(f"\n### {fpath}\n```{ext}\n{excerpt}\n```\n")
 
-    return found
+    return [f for f, _ in found]
+
+
+# ── main entry ────────────────────────────────────────────────────
 
 
 def find_context(task: str, target: str | None = None) -> None:
@@ -163,57 +218,117 @@ def find_context(task: str, target: str | None = None) -> None:
 
     arch      = _read_context_file('ARCHITECTURE.md')
     decisions = _read_context_file('DECISIONS.md')
+    symbols   = _read_context_file('SYMBOLS.md')
 
     if not arch:
         print(
-            f"Warning: {CONTEXT_DIR}/ARCHITECTURE.md is empty or missing. "
-            "File suggestions may be less accurate.",
+            f"Warning: {CONTEXT_DIR}/ARCHITECTURE.md is empty. "
+            "Run `cram sync` to rebuild it.",
             file=sys.stderr,
         )
 
     ctx_model, coding_model = get_model_recommendations()
-    print(f"Finding relevant files for: {task!r} ...")
-    print(f"  Context model : {ctx_model}")
-    print(f"  Coding model  : {coding_model}")
 
-    files = find_relevant_files(task, arch, decisions)
+    # ── Stage 1: symbol index ─────────────────────────────────────
+    if symbols:
+        sym_count = sum(
+            len(line.split(': ', 1)[1].split(','))
+            for line in symbols.splitlines() if ': ' in line
+        )
+        print(f"[1/4] Symbol index ready — {sym_count} identifiers across "
+              f"{symbols.count(chr(10)) + 1} files")
+    else:
+        print("[1/4] Symbol index not found — run `cram sync` for better file selection")
 
-    if not files:
+    # ── Stage 2: file selection (LLM call) ───────────────────────
+    print(f"[2/4] Identifying relevant files via {ctx_model} ...")
+    sys.stdout.flush()
+
+    file_entries = find_relevant_files(task, arch, decisions, symbols)
+    found_entries = [(f, ids) for f, ids in file_entries if os.path.exists(f)]
+    missing       = [f for f, _ in file_entries if not os.path.exists(f)]
+
+    if not file_entries:
         print("No files identified. Check that ARCHITECTURE.md describes the repo structure.")
         return
 
-    inlined = populate_current_task(task, files, ctx_model, coding_model)
+    for fpath, ids in found_entries:
+        id_note = f" ({', '.join(ids[:3])}{'…' if len(ids) > 3 else ''})" if ids else ''
+        print(f"  → {fpath}{id_note}")
+    if missing:
+        print(f"  (skipped {len(missing)} not found on disk)")
 
-    # Report token estimate
+    # Warn about truncation (Gap 6)
+    total_suggested = len(file_entries)
+    if total_suggested >= MAX_FILES:
+        print(f"  Note: capped at {MAX_FILES} files — set AICONTEXT_MAX_FILES to raise limit")
+
+    # ── Stage 3: excerpt extraction ───────────────────────────────
+    print(f"[3/4] Extracting focused excerpts from {len(found_entries)} file(s) ...")
+    sys.stdout.flush()
+
+    for fpath, ids in found_entries:
+        excerpt = _extract_excerpt(fpath, ids)
+        tok = len(excerpt) // 4
+        id_note = f" ({', '.join(ids[:2])}{'…' if len(ids) > 2 else ''})" if ids else ''
+        print(f"  → {fpath}{id_note}  ~{tok:,} tokens")
+
+    # ── Stage 4: write context ───────────────────────────────────
+    print(f"[4/4] Writing context ...")
+    sys.stdout.flush()
+
+    inlined = populate_current_task(task, file_entries, ctx_model, coding_model)
+
     task_path = os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md')
     with open(task_path) as f:
         tokens = len(f.read()) // 4
-    print(f"\nWrote {CONTEXT_DIR}/CURRENT_TASK.md (~{tokens:,} tokens) with {len(inlined)} file(s):")
-    for f in inlined:
-        print(f"  {f}")
 
-    missing = [f for f in files if f not in inlined]
-    if missing:
-        print("\nSkipped (not found on disk):")
-        for f in missing:
-            print(f"  {f}")
+    min_tokens = cache_min_tokens(coding_model)
+    if tokens < min_tokens:
+        print(
+            f"  Warning: ~{tokens:,} tokens is below the {min_tokens:,}-token cache minimum "
+            f"for {coding_model}.\n"
+            f"  Increase AICONTEXT_MAX_LINES or AICONTEXT_MAX_EXCERPT_LINES to pad context."
+        )
 
     if target:
+        arch_content = _read_context_file('ARCHITECTURE.md')
         with open(task_path) as fh:
-            content = fh.read()
+            task_content = fh.read()
         root = _find_git_root(os.getcwd())
-        print("\nContext auto-loaded into:")
         if target == 'all':
-            written = _targets.write_to_all_detected(root, content)
+            written = _targets.write_to_all_detected(root, task_content, arch_content)
             for p in written:
                 print(f"  → {os.path.relpath(p)}")
             if not written:
                 print("  (no known tool indicators found — try a specific --target)")
         else:
-            path = _targets.write_to_target(root, target, content)
+            path = _targets.write_to_target(root, target, task_content, arch_content)
             print(f"  → {os.path.relpath(path)}")
 
-    print(f"\nReady. Switch to {coding_model} and start your session.")
+    # ── Save session metadata ─────────────────────────────────────
+    try:
+        from cram.session import save_session
+        root = _find_git_root(os.getcwd())
+        expiry = save_session(root, task)
+    except Exception:
+        root = _find_git_root(os.getcwd())
+        expiry = None
+
+    savings_note = ''
+    try:
+        from cram.benchmark import _count_repo_tokens
+        repo_tokens, _ = _count_repo_tokens(root)
+        if repo_tokens > tokens:
+            pct = int((1 - tokens / repo_tokens) * 100)
+            savings_note = f' · {pct}% less than full repo'
+    except Exception:
+        pass
+
+    print(f"\n✓ Ready — ~{tokens:,} tokens{savings_note} · switch to {coding_model}")
+    if expiry:
+        print(f"  Context resets on commit after {expiry} "
+              f"(run `cram continue` to extend)")
 
 
 def main() -> None:

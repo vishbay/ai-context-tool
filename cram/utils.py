@@ -194,6 +194,11 @@ def pick_coding_model(available: list[dict]) -> dict | None:
     return max(candidates, key=lambda m: m['quality']) if candidates else None
 
 
+def cache_min_tokens(model_name: str) -> int:
+    """Minimum prefix tokens required for prompt caching to activate for this model."""
+    return 4096 if 'opus' in model_name.lower() else 1024
+
+
 def get_model_recommendations() -> tuple[str, str]:
     """Return (context_model_name, coding_model_name) for display."""
     settings = load_settings()

@@ -7,6 +7,7 @@ import time
 
 from cram.init import scan_structure
 from cram.utils import call_context_model, strip_code_fence
+from cram.symbols import write_symbols_md
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 # A commit within this window of setting a task is treated as mid-session.
@@ -78,15 +79,24 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
     """Reset CURRENT_TASK.md and all target files after a commit, unless the
     task was set within the grace period (treat as mid-session commit)."""
     from cram import targets as _targets
+    from cram.session import load_session, clear_session
 
     task_path = os.path.join(context_dir, 'CURRENT_TASK.md')
 
     if not _task_has_real_content(task_path):
         return  # nothing to reset
 
-    age = time.time() - os.path.getmtime(task_path)
-    if age < TASK_GRACE_SECONDS:
-        print(f"Task set {int(age)}s ago — keeping context (within {TASK_GRACE_SECONDS}s grace period).")
+    session = load_session(root)
+    if session is not None:
+        age   = time.time() - session.get('set_at', 0.0)
+        grace = session.get('grace_seconds', TASK_GRACE_SECONDS)
+    else:
+        # Legacy: no session.json yet — use file mtime
+        age   = time.time() - os.path.getmtime(task_path)
+        grace = TASK_GRACE_SECONDS
+
+    if age < grace:
+        print(f"Task set {int(age)}s ago — keeping context (within {int(grace)}s grace period).")
         return
 
     with open(task_path, 'w') as f:
@@ -95,6 +105,7 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
     written = _targets.write_to_all_detected(root, SESSION_ENDED_TEMPLATE)
     for path in written:
         print(f"Session ended — cleared {os.path.relpath(path, root)}")
+    clear_session(root)
     print("Set a new task with `cram task \"...\"` or via the tray.")
 
 
@@ -130,6 +141,10 @@ def sync(root: str = '.') -> None:
         f.write(updated)
 
     print(f"Done. {CONTEXT_DIR}/ARCHITECTURE.md updated.")
+
+    print("Refreshing symbol index ...")
+    _, sym_count = write_symbols_md(root)
+    print(f"  {sym_count} identifiers indexed")
 
     _reset_task_if_session_ended(root, context_dir)
 
