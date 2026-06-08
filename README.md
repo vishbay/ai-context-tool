@@ -274,23 +274,29 @@ re-discovering the codebase — reading files, running searches, building orient
 | Output | Code written, explanations | 5–15K |
 | **Per task total** | | **50–130K** |
 
-The orientation phase (30–50% of every session) is pure re-discovery overhead — the agent reads
-10–20 files cold before it knows where to work. cram replaces that with one `get_context()` call
+The orientation phase is pure re-discovery overhead — the agent reads roughly 8 files cold
+each session to figure out where to work. cram replaces that with one `get_context()` call
 returning ~1–2K tokens of targeted excerpts.
 
-**Scaled to a full day:**
+**What cram removes — and what the tray estimates:**
 
-| Usage | Tasks/day | Est. tokens/day | Cost at Sonnet 4.6 |
-|---|---|---|---|
-| Light | 2 short tasks | ~150K | ~$0.50 |
-| **Average** | **4 feature tasks** | **~400K** | **~$1.20** |
-| Heavy | 6+ complex tasks | ~900K | ~$2.70 |
+cram eliminates the cold-start orientation overhead per session. It does **not** replace
+the agent's productive reads (edits, tests, active work). The savings are real and scale
+with repo size — but they are orientation-only, not total-session savings.
 
-For the average developer (~400K tokens/day), roughly **120–200K tokens/day is orientation
-overhead** — paid on every session, for every task, from scratch.
+The tray models this as: `sessions/day × orientation_tokens × base_price`
 
-**cram tray shows live daily estimates** based on your actual repo size (4 sessions × 4 tasks/day).
-Use the model selector in the tray popup to see estimates for your model:
+Default assumptions (overridable via env):
+- `AICONTEXT_SESSIONS_PER_DAY=4` — coding sessions per day
+- `AICONTEXT_TASKS_PER_SESSION=4` — tasks per warm-cache window
+- `AICONTEXT_ORIENT_FILES=8` — files read cold to orient per session
+
+**Savings scale with repo size.** A small repo like cram-ai itself (50 files, ~80k tokens)
+yields cents/day — correct and honest. A mid-size repo (200 files, ~500k tokens) yields
+roughly ~$0.50–1.50/day depending on session frequency and model.
+
+**cram tray shows live estimates** based on your actual repo. Use the model selector to
+see estimates for your model:
 
 | Model | Base input price |
 |---|---|
@@ -300,10 +306,13 @@ Use the model selector in the tray popup to see estimates for your model:
 
 | Metric | What it shows |
 |---|---|
-| Context reduction | How much smaller cram context is vs full repo scan |
-| Without cram/day | Estimated daily cost if the agent reads the full repo each task |
-| With cram/day | Estimated daily cost using the frozen context layer (MCP path) |
-| Saved/day | The difference — scales with repo size and session frequency |
+| Context reduction | How much smaller the cram frozen layer is vs the full repo |
+| Orientation / day | ~-prefixed est. cost of cold-start orientation per day without cram |
+| Cram layer / day | ~-prefixed est. cost of the frozen cram layer (1 write + N−1 reads/session) |
+| Saved / day | The difference — orientation overhead avoided; low-precision estimate |
+
+The tray also shows **actual usage** (writes, reads, est. spend) from Claude Code transcripts
+when available, so modeled numbers aren't the only story.
 
 Run `cram benchmark` for a full breakdown across all three delivery strategies and all model tiers.
 

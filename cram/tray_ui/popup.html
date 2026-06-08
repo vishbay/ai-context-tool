@@ -118,13 +118,14 @@
   <!-- Metrics -->
   <div class="metrics collapsible">
     <div class="metric-heading">
-      Estimated savings vs no cram ·
+      Orientation overhead estimate ·
       <select id="model-select" class="model-select" onchange="onModelChange()">
         <option value="haiku45">Haiku 4.5</option>
         <option value="sonnet46" selected>Sonnet 4.6</option>
         <option value="opus4">Opus 4</option>
       </select>
     </div>
+    <div class="metric-sub" id="size-caption"></div>
     <div class="metric-row">
       <div class="metric-block">
         <div class="metric-value" id="savings-pct">—</div>
@@ -133,12 +134,12 @@
       <div class="metric-divider"></div>
       <div class="metric-block">
         <div class="metric-value" id="nocram-daily">—</div>
-        <div class="metric-label">without cram / day</div>
+        <div class="metric-label">orientation / day</div>
       </div>
       <div class="metric-divider"></div>
       <div class="metric-block">
         <div class="metric-value" id="cram-daily">—</div>
-        <div class="metric-label">with cram / day</div>
+        <div class="metric-label">cram layer / day</div>
       </div>
       <div class="metric-divider"></div>
       <div class="metric-block">
@@ -148,6 +149,28 @@
     </div>
     <div class="metric-sub" id="daily-est-line"></div>
     <div class="metric-sub" id="last-task-line"></div>
+  </div>
+
+  <!-- Measured usage panel (hidden when no Claude Code transcripts found) -->
+  <div class="metrics collapsible" id="measured-panel" style="display:none">
+    <div class="metric-heading">Actual usage · last 7d <span style="font-size:9px;opacity:.6;margin-left:4px">actual</span></div>
+    <div class="metric-row">
+      <div class="metric-block">
+        <div class="metric-value" id="measured-writes">—</div>
+        <div class="metric-label">cache writes</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="measured-reads">—</div>
+        <div class="metric-label">cache reads</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-block">
+        <div class="metric-value" id="measured-cost">—</div>
+        <div class="metric-label">est. spend</div>
+      </div>
+    </div>
+    <div class="metric-sub" id="measured-sessions-line"></div>
   </div>
 
   <!-- Activity log -->

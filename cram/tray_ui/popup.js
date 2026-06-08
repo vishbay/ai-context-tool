@@ -317,6 +317,17 @@ async function dismissBranchAlert() {
   fetch('/dismiss-branch-alert', { method: 'POST' }).catch(() => {});
 }
 
+function _formatCost(val) {
+  if (val < 0.01) return '<$0.01';
+  return `~$${val.toFixed(2)}`;
+}
+
+function _formatTok(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000)      return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 function _applyModelPricing() {
   if (!_rawMetrics) return;
   const ratio  = MODEL_PRICING[_selectedModel].base / MODEL_PRICING.sonnet46.base;
@@ -324,18 +335,21 @@ function _applyModelPricing() {
   const cram   = _rawMetrics.cram_daily   * ratio;
   const saving = Math.max(0, nocram - cram);
 
-  document.getElementById('cost-saved').textContent =
-    saving >= 1 ? `$${saving.toFixed(2)}` : `$${saving.toFixed(3)}`;
-  document.getElementById('nocram-daily').textContent =
-    nocram >= 1 ? `$${nocram.toFixed(2)}` : `$${nocram.toFixed(3)}`;
-  document.getElementById('cram-daily').textContent =
-    cram >= 1 ? `$${cram.toFixed(2)}` : `$${cram.toFixed(3)}`;
+  document.getElementById('cost-saved').textContent   = _formatCost(saving);
+  document.getElementById('nocram-daily').textContent = _formatCost(nocram);
+  document.getElementById('cram-daily').textContent   = _formatCost(cram);
 
-  const repoTok = _rawMetrics.repo_tokens >= 1000
-    ? `${(_rawMetrics.repo_tokens / 1000).toFixed(0)}k`
-    : String(_rawMetrics.repo_tokens);
+  const repoTok    = _formatTok(_rawMetrics.repo_tokens || 0);
+  const orientFil  = _rawMetrics.orient_files || 8;
+  const modelLabel = MODEL_PRICING[_selectedModel].label;
   document.getElementById('daily-est-line').textContent =
-    `repo: ~${repoTok} tok · 4 sessions × 4 tasks/day · ${MODEL_PRICING[_selectedModel].label}`;
+    `repo: ~${repoTok} tok · 4 sessions × 4 tasks/day · ~${orientFil} files to orient · ${modelLabel}`;
+
+  if (_rawMetrics.savings_pct !== undefined) {
+    const layerPct = 100 - _rawMetrics.savings_pct;
+    document.getElementById('size-caption').textContent =
+      `frozen layer is ${layerPct}% the size of the repo`;
+  }
 }
 
 function onModelChange() {
@@ -379,10 +393,33 @@ async function fetchMetrics() {
   }
 }
 
+async function fetchMeasured() {
+  try {
+    const res  = await fetch('/measured');
+    const data = await res.json();
+    const panel = document.getElementById('measured-panel');
+    if (!panel) return;
+    if (!data.available) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+    document.getElementById('measured-writes').textContent = _formatTok(data.writes || 0);
+    document.getElementById('measured-reads').textContent  = _formatTok(data.reads  || 0);
+    document.getElementById('measured-cost').textContent   = _formatCost(data.est_cost || 0);
+    document.getElementById('measured-sessions-line').textContent =
+      `${data.sessions} session${data.sessions !== 1 ? 's' : ''} · last ${data.days}d · Sonnet 4.6 est.`;
+    _autoHeight();
+  } catch {
+    // silently ignore
+  }
+}
+
 async function refresh() {
   await Promise.all([fetchStatus(), fetchMetrics(), fetchRepo()]);
   updateHint(_lastState, _hasRecentTask);
   fetchSuggestion();
+  fetchMeasured();
 }
 
 // ── SSE stream reader ─────────────────────────────────────

@@ -94,19 +94,25 @@ _SCAN_EXTS = {
     '.py', '.ts', '.tsx', '.js', '.jsx', '.go', '.rs', '.rb',
     '.java', '.md', '.json', '.toml', '.yaml', '.yml', '.html', '.css',
 }
+# Lockfiles inflate repo_tokens without reflecting real orientation cost.
+_SKIP_FILES = {'package-lock.json', 'yarn.lock', 'poetry.lock', 'Cargo.lock', 'pnpm-lock.yaml'}
 
-def _estimate_repo_tokens(root: str) -> int:
-    total = 0
+
+def _estimate_repo_tokens(root: str) -> tuple[int, int]:
+    total = files = 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_SCAN]
         for fname in filenames:
+            if fname in _SKIP_FILES:
+                continue
             if os.path.splitext(fname)[1] in _SCAN_EXTS:
                 try:
                     with open(os.path.join(dirpath, fname), errors='ignore') as f:
                         total += len(f.read())
+                    files += 1
                 except OSError:
                     pass
-    return total // 4
+    return total // 4, files
 
 def _age_short(secs: float) -> str:
     s = int(secs)
@@ -211,22 +217,15 @@ def create_app(repo_path: str) -> Flask:
                 if fname in _FROZEN:
                     frozen_tok += tokens
 
-        repo_tokens = _estimate_repo_tokens(root())
-        savings_pct = max(0, int((1 - total_cram / max(repo_tokens, 1)) * 100))
-        cost_saved  = (repo_tokens - total_cram) / 1_000_000 * 3.75
+        from cram.cost_model import (
+            CostInputs, daily_costs, MODEL_BASE, orientation_tokens, ORIENT_FILES,
+        )
 
-        # Daily developer cost estimates — Sonnet 4.6 pricing
-        # Model: 4 sessions/day, TASKS_PER_SESSION tasks each, 5-min TTL cache
-        #   No cram:  every task re-reads the full repo  → N×S writes/day
-        #   With cram MCP: 1 frozen write + (N-1) reads per session
-        _BASE  = 3.0 / 1_000_000   # Sonnet 4.6 base input price
-        _WRITE = _BASE * 1.25       # cache write multiplier
-        _READ  = _BASE * 0.10       # cache read multiplier
-        _S     = 4                  # sessions per day
-        _T     = int(os.environ.get('AICONTEXT_TASKS_PER_SESSION', '4'))
-        nocram_daily = _S * _T * repo_tokens * _WRITE
-        cram_daily   = _S * (frozen_tok * _WRITE + (_T - 1) * frozen_tok * _READ)
-        daily_saving = max(0.0, nocram_daily - cram_daily)
+        repo_tokens, repo_files = _estimate_repo_tokens(root())
+        savings_pct = max(0, int((1 - total_cram / max(repo_tokens, 1)) * 100))
+
+        inp   = CostInputs(repo_tokens=repo_tokens, repo_files=repo_files, frozen_tok=frozen_tok)
+        costs = daily_costs(inp, MODEL_BASE['Sonnet 4.6'])
 
         task_path = os.path.join(cd, 'CURRENT_TASK.md')
         try:
@@ -249,15 +248,32 @@ def create_app(repo_path: str) -> Flask:
             'initialized':   True,
             'cram_tokens':   total_cram,
             'repo_tokens':   repo_tokens,
+            'repo_files':    repo_files,
             'savings_pct':   savings_pct,
-            'cost_saved':    round(cost_saved, 3),
-            'nocram_daily':  round(nocram_daily, 2),
-            'cram_daily':    round(cram_daily, 2),
-            'daily_saving':  round(daily_saving, 2),
+            'orient_tokens': costs['orient_tokens'],
+            'orient_files':  ORIENT_FILES,
+            'nocram_daily':  round(costs['nocram_daily'], 4),
+            'cram_daily':    round(costs['cram_daily'],   4),
+            'daily_saving':  round(costs['daily_saving'], 4),
             'files':         files,
             'last_task_age': last_task_age,
             'last_sync_age': last_sync_age,
         })
+
+    # ── measured usage ────────────────────────────────────────────
+
+    _measured_cache: list = [None, 0.0]  # [data, timestamp]
+
+    @app.get('/measured')
+    def get_measured():
+        now = time.time()
+        if _measured_cache[0] is not None and now - _measured_cache[1] < 60:
+            return jsonify(_measured_cache[0])
+        from cram.usage import measured_usage
+        data = measured_usage(root()) or {'available': False}
+        _measured_cache[0] = data
+        _measured_cache[1] = now
+        return jsonify(data)
 
     # ── actions ───────────────────────────────────────────────────
 

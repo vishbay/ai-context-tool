@@ -26,6 +26,11 @@ from __future__ import annotations
 import os
 import sys
 
+from cram.cost_model import (
+    MODEL_BASE, WRITE_MULT, READ_MULT, ORIENT_FILES, SESSIONS_PER_DAY,
+    TASKS_PER_SESSION, CostInputs, daily_costs, orientation_tokens,
+)
+
 CONTEXT_DIR = '.cram-ai-context'
 
 _SKIP_DIRS = {
@@ -37,16 +42,7 @@ _SRC_EXTS = {
     '.py', '.ts', '.tsx', '.js', '.jsx', '.go', '.rs', '.rb',
     '.java', '.md', '.json', '.toml', '.yaml', '.yml', '.html', '.css', '.rst',
 }
-
-# Base input price per 1M tokens. Cache write = base x 1.25 (5-min TTL),
-# cache read = base x 0.1. (platform.claude.com pricing.)
-_MODELS: dict[str, float] = {
-    'Opus 4.8':   5.00,
-    'Sonnet 4.6': 3.00,
-    'Haiku 4.5':  1.00,
-}
-WRITE_MULT = 1.25   # 5-minute-TTL cache write
-READ_MULT  = 0.10   # cache read
+_SKIP_FILES = {'package-lock.json', 'yarn.lock', 'poetry.lock', 'Cargo.lock', 'pnpm-lock.yaml'}
 
 # Minimum cacheable prefix per model family. Below this nothing caches —
 # no write, but no read savings either, so the frozen layer must clear it.
@@ -55,10 +51,6 @@ _CACHE_MIN: dict[str, int] = {
     'Sonnet 4.6': 2048,
     'Haiku 4.5':  4096,
 }
-
-# How many `cram task` invocations a developer runs against one warm cache
-# before it expires. Override with AICONTEXT_TASKS_PER_SESSION.
-TASKS_PER_SESSION = int(os.environ.get('AICONTEXT_TASKS_PER_SESSION', '4'))
 
 # Frozen layer = the stable, cached prefix. Volatile layer = per-task payload.
 _FROZEN_FILES   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md', 'GOTCHAS.md')
@@ -74,6 +66,8 @@ def _count_repo_tokens(root: str) -> tuple[int, int]:
             if d not in _SKIP_DIRS and not d.startswith('.')
         ]
         for fname in filenames:
+            if fname in _SKIP_FILES:
+                continue
             if os.path.splitext(fname)[1] in _SRC_EXTS:
                 try:
                     with open(os.path.join(dirpath, fname), errors='ignore') as f:
@@ -141,46 +135,62 @@ def run_benchmark(root: str) -> None:
     # ── Cache-write model ─────────────────────────────────────────
     # Three scenarios, N tasks per warm-cache session:
     #
-    #   1. No cram       → N writes of full repo  (model re-reads everything)
-    #   2. Prefix inject → N writes of frozen_tok (CLAUDE.md rewritten each task)
-    #   3. MCP delivery  → 1 write + (N-1) reads  (frozen prefix cached)
+    #   1. No cram       → orient reads per session (base input, ~ORIENT_FILES files)
+    #   2. Prefix inject → N writes of frozen_tok  (CLAUDE.md rewritten each task)
+    #   3. MCP delivery  → 1 write + (N-1) reads   (frozen prefix cached)
     #
     # The volatile per-task payload (CURRENT_TASK.md) rides as a tool result
     # on path 3 — it never invalidates the cached prefix.
 
-    nocram_writes = n * repo_tokens
+    orient        = orientation_tokens(repo_tokens, file_count)
+    nocram_tok    = orient       # per-session, base input (cold-start reads)
     inj_writes    = n * frozen_tok
     stable_writes = frozen_tok
     stable_reads  = (n - 1) * frozen_tok
 
+    nocram_label = f'1. no cram (~{ORIENT_FILES} files orient)'
+
     print(f"  Cache-write model  ·  {n} tasks per warm cache  ·  5-min TTL\n")
-    print(f"  {'':<28}{'cache writes':>16}{'$/session':>13}{'$/100 sessions':>17}")
+    print(f"  {'':<30}{'tokens/session':>16}{'$/session':>13}{'$/100 sessions':>17}")
     print(f"  {sep}")
 
-    for model, base in _MODELS.items():
-        write_price  = base * WRITE_MULT / 1_000_000
-        read_price   = base * READ_MULT  / 1_000_000
-        nocram_cost  = nocram_writes  * write_price
-        inj_cost     = inj_writes     * write_price
-        stable_cost  = stable_writes  * write_price + stable_reads * read_price
+    for model, base in MODEL_BASE.items():
+        base_price   = base / 1_000_000
+        write_price  = base_price * WRITE_MULT
+        read_price   = base_price * READ_MULT
+        nocram_cost  = nocram_tok   * base_price   # base input, not cache write
+        inj_cost     = inj_writes   * write_price
+        stable_cost  = stable_writes * write_price + stable_reads * read_price
         print(f"  {model}")
-        print(f"    {'1. no cram (auto-index)':<26}{nocram_writes:>16,}{nocram_cost:>12.3f} "
-              f"{nocram_cost * 100:>16.2f}")
-        print(f"    {'2. cram prefix-injected':<26}{inj_writes:>16,}{inj_cost:>12.3f} "
-              f"{inj_cost * 100:>16.2f}")
-        print(f"    {'3. cram MCP-delivered':<26}{stable_writes:>16,}{stable_cost:>12.3f} "
-              f"{stable_cost * 100:>16.2f}")
-        mcp_vs_nocram = nocram_cost - stable_cost
-        mcp_vs_inj    = inj_cost    - stable_cost
-        print(f"    {'→ MCP vs no-cram':<26}{'':>16}{mcp_vs_nocram:>12.3f} "
-              f"{mcp_vs_nocram * 100:>16.2f}  saved")
-        print(f"    {'→ MCP vs injected':<26}{'':>16}{mcp_vs_inj:>12.3f} "
-              f"{mcp_vs_inj * 100:>16.2f}  saved")
+        print(f"    {nocram_label:<28}{nocram_tok:>16,}{nocram_cost:>12.4f} "
+              f"{nocram_cost * 100:>16.3f}")
+        print(f"    {'2. cram prefix-injected':<28}{inj_writes:>16,}{inj_cost:>12.4f} "
+              f"{inj_cost * 100:>16.3f}")
+        print(f"    {'3. cram MCP-delivered':<28}{stable_writes:>16,}{stable_cost:>12.4f} "
+              f"{stable_cost * 100:>16.3f}")
+        mcp_vs_nocram = max(0.0, nocram_cost - stable_cost)
+        mcp_vs_inj    = max(0.0, inj_cost    - stable_cost)
+        print(f"    {'→ MCP vs no-cram':<28}{'':>16}{mcp_vs_nocram:>12.4f} "
+              f"{mcp_vs_nocram * 100:>16.3f}  saved")
+        print(f"    {'→ MCP vs injected':<28}{'':>16}{mcp_vs_inj:>12.4f} "
+              f"{mcp_vs_inj * 100:>16.3f}  saved")
         print()
 
     print(f"  {sep}")
     print(f"  Frozen prefix:  {frozen_tok:,} tok  ({frozen_tok / max(repo_tokens,1) * 100:.1f}% of repo)")
     print(f"  Per-task payload (tool result, never cache-written): ~{volatile_tok:,} tok\n")
+
+    # ── Daily orientation estimate (matches tray popup) ───────────
+    print(f"  Daily orientation estimate  "
+          f"·  {SESSIONS_PER_DAY} sessions/day × {TASKS_PER_SESSION} tasks/session\n")
+    print(f"  {'':<14}{'orientation/day':>18}{'cram layer/day':>18}{'saved/day':>14}")
+    print(f"  {sep}")
+    for model, base in MODEL_BASE.items():
+        inp   = CostInputs(repo_tokens=repo_tokens, repo_files=file_count, frozen_tok=frozen_tok)
+        d     = daily_costs(inp, base)
+        print(f"  {model:<14}{d['nocram_daily']:>17.4f} {d['cram_daily']:>17.4f} "
+              f"{d['daily_saving']:>13.4f}")
+    print()
 
     # ── Cache-minimum check (frozen layer must be cacheable) ──────
     print("  Cacheable-prefix check  (frozen layer must clear the minimum)")
