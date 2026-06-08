@@ -259,6 +259,50 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 
 ---
 
+## 💰 Real-world token consumption
+
+Without context pre-loading, an agent spends the first few exchanges of every session
+re-discovering the codebase — reading files, running searches, building orientation from scratch.
+
+**What a typical session consumes (no cram):**
+
+| Phase | What happens | Tokens |
+|---|---|---|
+| Session start | System prompt + tool definitions + rules files | 3–8K |
+| Orientation | `find` / `grep` / `read` calls to discover relevant files cold | 20–60K |
+| Active work | Conversation, edits, test runs | 20–50K |
+| Output | Code written, explanations | 5–15K |
+| **Per task total** | | **50–130K** |
+
+The orientation phase (30–50% of every session) is pure re-discovery overhead — the agent reads
+10–20 files cold before it knows where to work. cram replaces that with one `get_context()` call
+returning ~1–2K tokens of targeted excerpts.
+
+**Scaled to a full day:**
+
+| Usage | Tasks/day | Est. tokens/day | Cost at Sonnet 4.6 |
+|---|---|---|---|
+| Light | 2 short tasks | ~150K | ~$0.50 |
+| **Average** | **4 feature tasks** | **~400K** | **~$1.20** |
+| Heavy | 6+ complex tasks | ~900K | ~$2.70 |
+
+For the average developer (~400K tokens/day), roughly **120–200K tokens/day is orientation
+overhead** — paid on every session, for every task, from scratch.
+
+**cram tray shows live daily estimates** based on your actual repo size (4 sessions × 4 tasks/day,
+Sonnet 4.6 pricing):
+
+| Metric | What it shows |
+|---|---|
+| % tokens saved | Cram context vs full repo scan |
+| Without cram/day | Estimated daily cost if the agent reads the full repo each task |
+| With cram/day | Estimated daily cost using the frozen context layer (MCP path) |
+| Saved/day | The difference — scales with repo size and session frequency |
+
+Run `cram benchmark` for a full breakdown across all three delivery strategies and all model tiers.
+
+---
+
 <details>
 <summary>💸 <strong>Claude Code users: cache-write bonus</strong></summary>
 
