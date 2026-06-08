@@ -21,13 +21,25 @@ def main():
         sys.exit(0)
 
     # Extract task name — two formats:
-    #   Active:  "# Task: <description>" (set by cram task / MCP)
-    #   Reset:   "# Current Task\n\n## Task\n<!-- Session ended... -->"
+    #   MCP format:  "# Task: <description>" (first line)
+    #   CLI format:  "# Current Task\n\n## Task\n<description>"
+    #   Reset state: "# Current Task\n\n## Task\n<!-- Session ended... -->"
     task = ''
-    for line in content.split('\n'):
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
         s = line.strip()
         if s.startswith('# Task:'):
             task = s[len('# Task:'):].strip()
+            break
+        if s == '## Task':
+            # Next non-empty, non-comment, non-heading line is the task description
+            for next_line in lines[i + 1:]:
+                ns = next_line.strip()
+                if ns.startswith('#'):
+                    break  # hit next section — no task set
+                if ns and not ns.startswith('<!--'):
+                    task = ns
+                    break
             break
 
     # Skip injection when no active task (placeholder-only content)
