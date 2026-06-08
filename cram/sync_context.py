@@ -146,6 +146,24 @@ def sync(root: str = '.') -> None:
     _, sym_count = write_symbols_md(root)
     print(f"  {sym_count} identifiers indexed")
 
+    # Warn on over-budget frozen files (soft warning — never truncates).
+    from cram.cost_model import FILE_BUDGETS, budget_status as _budget_status
+    for fname, limit in FILE_BUDGETS.items():
+        fpath = os.path.join(context_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+        try:
+            with open(fpath, errors='ignore') as _f:
+                tokens = len(_f.read()) // 4
+            if _budget_status(fname, tokens) == 'over':
+                print(
+                    f"  Warning: {fname} is {tokens} tok (budget {limit}) — "
+                    "trim before next session.",
+                    file=sys.stderr,
+                )
+        except OSError:
+            pass
+
     _reset_task_if_session_ended(root, context_dir)
 
 

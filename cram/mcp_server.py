@@ -88,6 +88,19 @@ def get_context(task: str = '') -> str:
                 'to generate context for a specific task, or run `cram task "..."` '
                 'from the terminal first.'
             )
+        # Prepend a staleness warning when context may be out of date.
+        try:
+            from cram.health import context_health
+            h = context_health(_repo_root)
+            band = h['staleness_band']
+            if band in ('stale', 'critical'):
+                score   = h['staleness_score']
+                commits = h['commits_since_sync']
+                commit_note = f' — {commits} commit{"s" if commits != 1 else ""} since last sync' if commits else ''
+                header = f'> staleness: {band} ({score}/10){commit_note} — run `cram sync` before relying on this context\n\n'
+                content = header + content
+        except Exception:
+            pass
         return content
 
     # Run find_context in the repo directory
@@ -186,6 +199,46 @@ def get_gotchas() -> str:
     if not content:
         return 'GOTCHAS.md not found. Run `cram init` to create it, then add entries as you find them.'
     return content
+
+
+@mcp.tool()
+def get_health() -> str:
+    """Report context staleness + per-file token budgets.
+
+    Use this to decide whether to trust the loaded context or run `cram sync`
+    first. Returns a deterministic markdown block — safe to cache.
+    """
+    if not _repo_root:
+        return 'Error: repo root not configured.'
+
+    from cram.health import context_health
+    h = context_health(_repo_root)
+
+    band    = h['staleness_band']
+    score   = h['staleness_score']
+    commits = h['commits_since_sync']
+
+    commit_note = (
+        f' — {commits} commit{"s" if commits != 1 else ""} since last sync'
+        if commits is not None else ''
+    )
+
+    lines = ['# Context health', f'- staleness: {band} ({score}/10){commit_note}']
+
+    for fname, info in h['files'].items():
+        tok    = info['tokens']
+        budget = info['budget']
+        bstat  = info['budget_status']
+        if budget:
+            suffix = ' OVER — trim before next sync' if bstat == 'over' else ''
+            lines.append(f'- {fname}  {tok:,} tok (budget {budget:,}) {bstat}{suffix}')
+        else:
+            lines.append(f'- {fname}  {tok:,} tok')
+
+    if band in ('stale', 'critical'):
+        lines.append('- recommendation: run `cram sync` before relying on this context')
+
+    return '\n'.join(lines)
 
 
 @mcp.tool()

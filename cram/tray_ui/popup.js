@@ -286,12 +286,19 @@ async function fetchStatus() {
     }
 
     _lastState = data.state;
-    setState(data.state);
-    if (data.state === 'stale') {
-      const archAge = data.files?.['ARCHITECTURE.md']?.age_label ?? '';
-      setBadge(archAge ? `${archAge} stale` : 'stale');
+    const band = data.staleness_band;
+    if (band) {
+      setState(band);
+      const score = data.staleness_score;
+      setBadge(band === 'fresh' ? 'fresh' : `${band} ${score}/10`);
     } else {
-      setBadge('fresh');
+      setState(data.state);
+      if (data.state === 'stale') {
+        const archAge = data.files?.['ARCHITECTURE.md']?.age_label ?? '';
+        setBadge(archAge ? `${archAge} stale` : 'stale');
+      } else {
+        setBadge('fresh');
+      }
     }
   } catch {
     _lastState = 'loading';
@@ -383,6 +390,23 @@ async function fetchMetrics() {
     if (data.last_task_age) parts.push(`task: ${data.last_task_age} ago`);
     if (data.last_sync_age) parts.push(`sync: ${data.last_sync_age} ago`);
     document.getElementById('last-task-line').textContent = parts.join(' · ');
+
+    const budgetEl = document.getElementById('budget-warnings');
+    if (budgetEl && data.files) {
+      const warnings = [];
+      for (const [fname, info] of Object.entries(data.files)) {
+        if (info.budget_status === 'over' || info.budget_status === 'near') {
+          const label = info.budget_status === 'over' ? 'over budget' : 'near budget';
+          warnings.push(`⚠ ${fname} ${info.tokens}/${info.budget} tok ${label}`);
+        }
+      }
+      if (warnings.length > 0) {
+        budgetEl.textContent = warnings.join(' · ');
+        budgetEl.classList.remove('hidden');
+      } else {
+        budgetEl.classList.add('hidden');
+      }
+    }
 
     // "recent" = task set within the last hour
     _hasRecentTask = !!(data.last_task_age &&

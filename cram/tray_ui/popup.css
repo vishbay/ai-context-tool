@@ -175,6 +175,20 @@ header {
 }
 .state-stale .badge::before { background: var(--amber); }
 
+.state-acceptable .badge {
+  background: var(--surface2);
+  border-color: rgba(255,255,255,0.12);
+  color: var(--muted);
+}
+.state-acceptable .badge::before { background: var(--muted); }
+
+.state-critical .badge {
+  background: var(--red-dim);
+  border-color: rgba(255,92,92,0.25);
+  color: var(--red);
+}
+.state-critical .badge::before { background: var(--red); }
+
 .state-not-init .badge,
 .state-loading  .badge {
   background: var(--red-dim);
@@ -701,6 +715,16 @@ footer {
 .state-stale #sync-btn {
   color: var(--amber); background: var(--amber-dim);
   border-color: rgba(251,191,36,0.22);
+}
+
+.state-critical #sync-btn {
+  color: var(--red); background: var(--red-dim);
+  border-color: rgba(255,92,92,0.22);
+}
+
+#budget-warnings {
+  color: var(--amber);
+  margin-top: 3px;
 }
 
 /* ── state visibility ───────────────────────────────────────────── */

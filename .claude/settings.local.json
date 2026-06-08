@@ -114,7 +114,17 @@
       "Bash(find /Users/vishbay -type d -iname \"sidequest\" 2>/dev/null)",
       "Bash(TWINE_USERNAME=__token__ TWINE_PASSWORD=pypi-* twine upload dist/*)",
       "Bash(curl -sL https://files.pythonhosted.org/packages/source/c/cram-ai/cram_ai-0.2.0.tar.gz)",
-      "Bash(shasum -a 256)"
+      "Bash(shasum -a 256)",
+      "Bash(cram menu *)",
+      "Bash(pkill -f \"cram-ai\")",
+      "Bash(git -C /Users/vishbay/cram-ai diff --stat HEAD)",
+      "Bash(git -C /Users/vishbay/cram-ai diff cram/tray.py)",
+      "Bash(mkdir -p /tmp/cram_reset/.cram-ai-context)",
+      "Read(//tmp/**)",
+      "Bash(echo \"exit: $? \\(expected 0, no output\\)\")",
+      "Bash(echo \"exit: $? output_lines: $\\(python3 /Users/vishbay/cram-ai/.claude/hooks/cram_session_start.py)",
+      "Bash(/Users/vishbay/cram-ai/.venv/bin/cram init *)",
+      "Bash(curl -s http://127.0.0.1:49157/metrics)"
     ]
   }
 }

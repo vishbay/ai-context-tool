@@ -133,3 +133,87 @@ class TestGetContextDeterminism:
         result = srv.get_context()
 
         assert 'No context loaded yet' in result
+
+    def test_stale_header_prepended_when_stale(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        import cram.health as health_mod
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        (repo / CONTEXT_DIR / 'CURRENT_TASK.md').write_text('# Task: fix\n\nsome context\n')
+
+        fake_health = {
+            'staleness_band': 'stale', 'staleness_score': 6,
+            'commits_since_sync': 6, 'state': 'stale', 'last_commit_age': '1h ago',
+            'files': {},
+        }
+        monkeypatch.setattr(health_mod, 'context_health', lambda root: fake_health)
+
+        result = srv.get_context()
+        assert result.startswith('> staleness: stale')
+        assert 'run `cram sync`' in result
+
+    def test_no_stale_header_when_fresh(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        import cram.health as health_mod
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        (repo / CONTEXT_DIR / 'CURRENT_TASK.md').write_text('# Task: fix\n\nsome context\n')
+
+        fake_health = {
+            'staleness_band': 'fresh', 'staleness_score': 1,
+            'commits_since_sync': 0, 'state': 'fresh', 'last_commit_age': None,
+            'files': {},
+        }
+        monkeypatch.setattr(health_mod, 'context_health', lambda root: fake_health)
+
+        result = srv.get_context()
+        assert not result.startswith('> staleness:')
+
+
+# ---------------------------------------------------------------------------
+# get_health determinism + content
+# ---------------------------------------------------------------------------
+
+class TestGetHealthDeterminism:
+    def test_identical_on_repeat(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        r1 = srv.get_health()
+        r2 = srv.get_health()
+        assert r1 == r2
+
+    def test_contains_health_header(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        result = srv.get_health()
+        assert '# Context health' in result
+        assert 'staleness:' in result
+
+    def test_no_wall_clock_in_output(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        result = srv.get_health()
+        # Determinism check: no "ago" timestamps in the health body
+        assert ' ago' not in result
+
+    def test_over_budget_file_flagged(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        import cram.health as health_mod
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        fake_health = {
+            'staleness_band': 'stale', 'staleness_score': 6,
+            'commits_since_sync': 6, 'state': 'stale', 'last_commit_age': None,
+            'files': {
+                'GOTCHAS.md': {'tokens': 470, 'lines': 30, 'budget': 400, 'budget_status': 'over'},
+            },
+        }
+        monkeypatch.setattr(health_mod, 'context_health', lambda root: fake_health)
+
+        result = srv.get_health()
+        assert 'OVER' in result
+        assert 'GOTCHAS.md' in result
+        assert 'recommendation' in result

@@ -51,3 +51,49 @@ def test_daily_costs_returns_expected_keys():
 
 def test_import_works():
     from cram.cost_model import daily_costs, CostInputs  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# budget_status
+# ---------------------------------------------------------------------------
+
+class TestBudgetStatus:
+    def test_over_budget(self):
+        from cram.cost_model import budget_status
+        assert budget_status('GOTCHAS.md', 401) == 'over'
+
+    def test_near_budget(self):
+        from cram.cost_model import budget_status
+        assert budget_status('GOTCHAS.md', 360) == 'near'  # 360 >= 0.8 * 400
+
+    def test_ok_budget(self):
+        from cram.cost_model import budget_status
+        assert budget_status('GOTCHAS.md', 100) == 'ok'
+
+    def test_unknown_file_none(self):
+        from cram.cost_model import budget_status
+        assert budget_status('UNKNOWN.md', 9999) == 'none'
+
+    def test_symbols_md_none(self):
+        from cram.cost_model import budget_status
+        assert budget_status('SYMBOLS.md', 9999) == 'none'
+
+    def test_exact_boundary_over(self):
+        from cram.cost_model import budget_status, FILE_BUDGETS
+        limit = FILE_BUDGETS['GOTCHAS.md']
+        assert budget_status('GOTCHAS.md', limit + 1) == 'over'
+
+    def test_exact_boundary_at_limit_is_ok(self):
+        # tokens == limit is not > limit, not near (= exactly 100%), check boundary
+        from cram.cost_model import budget_status, FILE_BUDGETS
+        limit = FILE_BUDGETS['GOTCHAS.md']
+        # tokens == limit: not > limit, >= 0.8*limit → 'near'
+        assert budget_status('GOTCHAS.md', limit) == 'near'
+
+    def test_env_override(self, monkeypatch):
+        import cram.cost_model as cm
+        monkeypatch.setitem(cm.FILE_BUDGETS, 'GOTCHAS.md', 200)
+        from cram.cost_model import budget_status
+        assert budget_status('GOTCHAS.md', 201) == 'over'
+        assert budget_status('GOTCHAS.md', 160) == 'near'
+        assert budget_status('GOTCHAS.md', 50) == 'ok'

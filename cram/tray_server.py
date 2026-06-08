@@ -199,23 +199,14 @@ def create_app(repo_path: str) -> Flask:
             return jsonify({'initialized': False})
 
         now = time.time()
-        files: dict = {}
-        total_cram = 0
-        frozen_tok = 0
 
-        _FROZEN   = ('ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md', 'GOTCHAS.md')
-        _VOLATILE = ('CURRENT_TASK.md',)
+        from cram.health import context_health
+        health = context_health(root())
+        files  = health['files']  # tokens, lines, budget, budget_status per file
 
-        for fname in _FROZEN + _VOLATILE:
-            path = os.path.join(cd, fname)
-            if os.path.exists(path):
-                with open(path, errors='ignore') as f:
-                    content = f.read()
-                tokens = len(content) // 4
-                total_cram += tokens
-                files[fname] = {'tokens': tokens, 'lines': content.count('\n')}
-                if fname in _FROZEN:
-                    frozen_tok += tokens
+        _FROZEN = {'ARCHITECTURE.md', 'SYMBOLS.md', 'DECISIONS.md', 'GOTCHAS.md'}
+        total_cram = sum(f['tokens'] for f in files.values())
+        frozen_tok = sum(f['tokens'] for n, f in files.items() if n in _FROZEN)
 
         from cram.cost_model import (
             CostInputs, daily_costs, MODEL_BASE, orientation_tokens, ORIENT_FILES,

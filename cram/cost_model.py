@@ -42,6 +42,29 @@ def orientation_tokens(repo_tokens: int, repo_files: int) -> int:
     return int(min(repo_tokens, ORIENT_FILES * avg_file))
 
 
+# Soft per-file token budgets for the frozen context layer. Warnings only.
+# Calibrated to cram's output (ARCHITECTURE is line-budgeted ~300 lines), NOT
+# the 400-tok external target. SYMBOLS scales with repo size → no flat cap.
+FILE_BUDGETS = {
+    'ARCHITECTURE.md': int(os.environ.get('CRAM_BUDGET_ARCHITECTURE', '1500')),
+    'DECISIONS.md':    int(os.environ.get('CRAM_BUDGET_DECISIONS',    '600')),
+    'GOTCHAS.md':      int(os.environ.get('CRAM_BUDGET_GOTCHAS',      '400')),
+    'CURRENT_TASK.md': int(os.environ.get('CRAM_BUDGET_TASK',         '800')),
+}
+
+
+def budget_status(fname: str, tokens: int) -> str:
+    """'ok' | 'near' (≥80%) | 'over' (>100%) | 'none' (no budget for this file)."""
+    limit = FILE_BUDGETS.get(fname)
+    if not limit:
+        return 'none'
+    if tokens > limit:
+        return 'over'
+    if tokens >= 0.8 * limit:
+        return 'near'
+    return 'ok'
+
+
 def daily_costs(inp: CostInputs, base_price: float) -> dict:
     """Return modeled daily costs for one model's base input price."""
     base  = base_price / 1_000_000
