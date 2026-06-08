@@ -28,6 +28,16 @@
           <circle cx="7" cy="10" r=".75" fill="currentColor"/>
         </svg>
       </button>
+      <button class="icon-btn" id="minimize-btn" onclick="toggleCompact()" title="Minimize">
+        <!-- shown when expanded -->
+        <svg class="icon-minimize" width="12" height="2" viewBox="0 0 12 2" fill="none">
+          <path d="M1 1h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <!-- shown when compact -->
+        <svg class="icon-expand" width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2 8.5l4-4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button class="icon-btn close-btn" onclick="cramClose()" title="Close">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
           <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>

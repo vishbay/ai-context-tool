@@ -127,6 +127,11 @@ function cramExpandIfCompact() {
   if (app.classList.contains('compact')) cramExpand();
 }
 
+function toggleCompact() {
+  if (app.classList.contains('compact')) cramExpand();
+  else cramMinimize();
+}
+
 // ── help panel ────────────────────────────────────────────
 
 async function toggleHelp() {

@@ -199,6 +199,10 @@ header {
 #app.compact .collapsible { display: none !important; }
 #app.compact header { border-bottom: none; }
 
+/* minimize/expand icon swap */
+#app:not(.compact) .icon-expand { display: none; }
+#app.compact       .icon-minimize { display: none; }
+
 /* ── branch alert ───────────────────────────────────────────────── */
 
 .branch-alert {
