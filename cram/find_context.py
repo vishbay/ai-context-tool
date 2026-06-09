@@ -20,6 +20,13 @@ MAX_LINES         = MAX_EXCERPT_LINES  # alias kept for test compatibility
 
 CONTEXT_DIR = '.cram-ai-context'
 
+_STOP_WORDS = frozenset({
+    'the', 'a', 'an', 'in', 'for', 'of', 'and', 'or', 'is', 'it', 'to',
+    'fix', 'add', 'update', 'change', 'get', 'set', 'put', 'use', 'make',
+    'with', 'by', 'at', 'from', 'on', 'up', 'out', 'new', 'old', 'this',
+    'that', 'into', 'via', 'not', 'do', 'be', 'run', 'need',
+})
+
 
 # ── file helpers ──────────────────────────────────────────────────
 
@@ -63,6 +70,51 @@ def _clean_path(line: str) -> str:
     if '/' not in line and '.' not in line:
         return ''
     return line
+
+
+def _score_files(
+    task: str, symbols_text: str
+) -> list[tuple[str, float, list[str]]]:
+    """Score files from SYMBOLS.md by keyword overlap with the task.
+
+    Returns (filepath, score, [symbol, ...]) sorted descending by score.
+    Scoring: +2.0 per keyword in filename stem, +1.5 per keyword in a directory
+    component, +1.0 per keyword in a symbol name.
+    """
+    words = re.split(r'[^a-zA-Z0-9]+', task.lower())
+    keywords = [w for w in words if len(w) >= 3 and w not in _STOP_WORDS]
+    if not keywords:
+        return []
+
+    results: list[tuple[str, float, list[str]]] = []
+    for line in symbols_text.splitlines():
+        if ': ' not in line:
+            continue
+        filepath, sym_part = line.split(': ', 1)
+        filepath = filepath.strip()
+        if not filepath:
+            continue
+        syms     = [s.strip() for s in sym_part.split(',') if s.strip()]
+        sym_lower = [s.lower() for s in syms]
+        stem     = os.path.splitext(os.path.basename(filepath))[0].lower()
+        parts    = filepath.lower().replace('\\', '/').split('/')
+
+        score = 0.0
+        for kw in keywords:
+            if kw in stem:
+                score += 2.0
+            for part in parts[:-1]:      # directory components only
+                if kw in part:
+                    score += 1.5
+                    break
+            for sym in sym_lower:
+                if kw in sym:
+                    score += 1.0
+                    break
+        if score > 0:
+            results.append((filepath, score, syms))
+
+    return sorted(results, key=lambda x: x[1], reverse=True)
 
 
 # ── excerpt extraction ────────────────────────────────────────────
@@ -127,22 +179,34 @@ def _parse_file_line(raw: str) -> tuple[str, list[str]]:
 
 
 def find_relevant_files(
-    task: str, arch: str, decisions: str, symbols: str = '', gotchas: str = '',
+    task: str, arch: str, decisions: str = '', symbols: str = '', gotchas: str = '',
 ) -> list[tuple[str, list[str]]]:
     """Ask the context model to identify relevant files + their key identifiers.
 
     Returns a list of (resolved_path, [identifier, ...]) tuples.
+
+    DECISIONS and GOTCHAS are accepted for back-compat but not included in the
+    selection prompt — they don't help pick files and bloat the call.
     """
-    symbols_section = (
-        f"Symbol index (file → public identifiers):\n{symbols}\n\n"
-        if symbols else ''
-    )
-    gotchas_section = f"Known gotchas:\n{gotchas}\n\n" if gotchas else ''
+    if symbols:
+        scored = _score_files(task, symbols)
+        if scored:
+            hint = '\n'.join(
+                f'  {p} ({sc:.1f}) — {", ".join(ss[:4])}{"…" if len(ss) > 4 else ""}'
+                for p, sc, ss in scored[:5]
+            )
+            symbols_section = (
+                f"Top candidates by keyword match:\n{hint}\n\n"
+                f"Full symbol index:\n{symbols}\n\n"
+            )
+        else:
+            symbols_section = f"Symbol index (file → public identifiers):\n{symbols}\n\n"
+    else:
+        symbols_section = ''
+
     prompt = (
         f"Repo architecture:\n{arch}\n\n"
         f"{symbols_section}"
-        f"Decisions:\n{decisions}\n\n"
-        f"{gotchas_section}"
         f'Task: "{task}"\n\n'
         f"List ONLY the files DIRECTLY needed to complete this task.\n"
         f"For each file, include the specific identifiers (functions/classes) most relevant to the task.\n"
@@ -204,6 +268,20 @@ def populate_current_task(
     with open(os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md'), 'w') as out:
         out.write(f"# Current Task\n\n## Task\n{task}\n\n")
 
+        # Contract fields — Scope auto-derived, Out of Scope / DoD left for user
+        scope_dirs = sorted({os.path.dirname(f) or '.' for f, _ in found})
+        out.write('## Scope\n')
+        for d in scope_dirs:
+            label = (d + '/') if d and d != '.' else '.'
+            out.write(f'- {label}\n')
+        if not scope_dirs:
+            out.write('<!-- Populated after file selection -->\n')
+        out.write('\n')
+        out.write('## Out of Scope\n')
+        out.write('<!-- Add directories/files the agent should NOT touch -->\n\n')
+        out.write('## Definition of Done\n')
+        out.write('<!-- Add explicit acceptance criteria before closing this task -->\n\n')
+
         if ctx_model or coding_model:
             out.write("## Models\n")
             if ctx_model:
@@ -249,14 +327,22 @@ def find_context(task: str, target: str | None = None, inject: bool = False) -> 
 
     ctx_model, coding_model = get_model_recommendations()
 
-    # ── Stage 1: symbol index ─────────────────────────────────────
-    if symbols:
+    # ── Stage 1: symbol pre-filter ───────────────────────────────
+    scored = _score_files(task, symbols) if symbols else []
+    if scored:
+        n = len(scored)
+        print(f"[1/4] Symbol pre-filter → {n} candidate{'s' if n != 1 else ''}")
+        for path, score, syms in scored[:5]:
+            sym_note = f" ({', '.join(syms[:3])}{'…' if len(syms) > 3 else ''})" if syms else ''
+            print(f"  → {path}  ({score:.1f}){sym_note}")
+        if n > 5:
+            print(f"  … {n - 5} more")
+    elif symbols:
         sym_count = sum(
             len(line.split(': ', 1)[1].split(','))
             for line in symbols.splitlines() if ': ' in line
         )
-        print(f"[1/4] Symbol index ready — {sym_count} identifiers across "
-              f"{symbols.count(chr(10)) + 1} files")
+        print(f"[1/4] Symbol index ready — {sym_count} identifiers (no keyword matches, using full index)")
     else:
         print("[1/4] Symbol index not found — run `cram sync` for better file selection")
 

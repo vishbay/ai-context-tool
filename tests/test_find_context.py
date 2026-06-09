@@ -8,6 +8,7 @@ import pytest
 from cram.find_context import (
     _clean_path,
     _read_truncated,
+    _score_files,
     find_relevant_files,
     populate_current_task,
     find_context,
@@ -111,13 +112,37 @@ class TestFindRelevantFiles:
             result = find_relevant_files('task', '', '')
         assert len(result) <= 2
 
-    def test_passes_task_and_context_to_model(self):
+    def test_passes_task_and_arch_to_model(self):
         with patch('cram.find_context.call_model', return_value='src/a.py') as mock_call:
             find_relevant_files('my task', '# Arch content', '# Dec content')
         prompt = mock_call.call_args[0][0]
         assert 'my task' in prompt
         assert '# Arch content' in prompt
-        assert '# Dec content' in prompt
+
+    def test_decisions_excluded_from_selection_prompt(self):
+        # DECISIONS don't help pick files — keep them out of the selection prompt
+        decisions = 'use postgres for all persistence'
+        with patch('cram.find_context.call_model', return_value='src/a.py') as mock_call:
+            find_relevant_files('add auth', '# Arch', decisions, symbols='auth.py: login, logout')
+        prompt = mock_call.call_args[0][0]
+        assert decisions not in prompt
+
+    def test_scored_candidates_appear_as_hint_in_prompt(self):
+        symbols = 'cram/find_context.py: find_relevant_files, populate_current_task\n'
+        with patch('cram.find_context.call_model', return_value='cram/find_context.py') as mock_call:
+            find_relevant_files('fix find context pipeline', '# Arch', '', symbols=symbols)
+        prompt = mock_call.call_args[0][0]
+        assert 'Top candidates' in prompt
+        assert 'cram/find_context.py' in prompt
+
+    def test_full_index_used_when_no_keyword_matches(self):
+        symbols = 'utils.py: parse, format\nmodels.py: User, Post\n'
+        with patch('cram.find_context.call_model', return_value='utils.py') as mock_call:
+            # Task keywords ('zzz') won't match anything
+            find_relevant_files('zzz yyy xxx', '# Arch', '', symbols=symbols)
+        prompt = mock_call.call_args[0][0]
+        assert 'Symbol index' in prompt
+        assert 'utils.py' in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +194,134 @@ class TestPopulateCurrentTask:
 
         assert 'real.py' in found
         assert 'fake.py' not in found
+
+
+# ---------------------------------------------------------------------------
+# _score_files
+# ---------------------------------------------------------------------------
+
+class TestScoreFiles:
+    SYMBOLS = (
+        'cram/find_context.py: find_relevant_files, populate_current_task, find_context\n'
+        'cram/mcp_server.py: get_context, get_symbols, get_decisions\n'
+        'cram/utils.py: call_model, find_git_root\n'
+        'tests/test_find_context.py: TestScoreFiles, TestCleanPath\n'
+    )
+
+    def test_filename_match_scores_higher_than_symbol_only(self):
+        scored = _score_files('fix find context pipeline', self.SYMBOLS)
+        paths = [p for p, *_ in scored]
+        # 'find' and 'context' are in the filename stem → highest score
+        assert paths[0] == 'cram/find_context.py'
+
+    def test_symbol_match_returns_nonzero_score(self):
+        scored = _score_files('call the model', self.SYMBOLS)
+        paths = [p for p, *_ in scored]
+        assert 'cram/utils.py' in paths
+
+    def test_no_matching_keywords_returns_empty(self):
+        result = _score_files('zzz yyy xxx', self.SYMBOLS)
+        assert result == []
+
+    def test_stop_words_ignored(self):
+        # 'fix', 'add', 'the' are all stop words — no match on those alone
+        result = _score_files('fix the add', self.SYMBOLS)
+        assert result == []
+
+    def test_short_words_ignored(self):
+        result = _score_files('do it', self.SYMBOLS)
+        assert result == []
+
+    def test_returns_sorted_descending_by_score(self):
+        scored = _score_files('find context symbols', self.SYMBOLS)
+        scores = [sc for _, sc, _ in scored]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_symbols_included_in_result(self):
+        scored = _score_files('get context', self.SYMBOLS)
+        by_path = {p: ss for p, _, ss in scored}
+        assert 'get_context' in by_path.get('cram/mcp_server.py', [])
+
+    def test_directory_component_match(self):
+        symbols = 'auth/middleware.py: check_token, validate\n'
+        scored = _score_files('auth token validation', symbols)
+        # 'auth' matches directory component
+        assert len(scored) == 1
+        assert scored[0][0] == 'auth/middleware.py'
+        assert scored[0][1] >= 1.5
+
+
+# ---------------------------------------------------------------------------
+# populate_current_task — contract fields
+# ---------------------------------------------------------------------------
+
+class TestContractFields:
+    def test_scope_derived_from_found_files(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / 'cram').mkdir()
+        (tmp_path / 'cram' / 'utils.py').write_text('def helper(): pass\n')
+
+        populate_current_task('refactor helpers', ['cram/utils.py'])
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        assert '## Scope' in content
+        assert '- cram/' in content
+
+    def test_out_of_scope_placeholder_present(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / 'main.py').write_text('# main\n')
+
+        populate_current_task('fix main', ['main.py'])
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        assert '## Out of Scope' in content
+        assert '<!--' in content
+
+    def test_definition_of_done_placeholder_present(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / 'main.py').write_text('# main\n')
+
+        populate_current_task('fix main', ['main.py'])
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        assert '## Definition of Done' in content
+
+    def test_scope_repo_root_files(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / 'main.py').write_text('# main\n')
+
+        populate_current_task('fix main', ['main.py'])
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        assert '## Scope' in content
+        assert '- .' in content  # repo root shown as '.'
+
+    def test_scope_empty_when_no_files_found(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+
+        populate_current_task('task', ['ghost.py'])  # file doesn't exist
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        assert '## Scope' in content
+        # No dirs from missing files — shows placeholder
+        assert 'Populated after' in content or '## Out of Scope' in content
+
+    def test_contract_sections_before_relevant_files(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / 'app.py').write_text('# app\n')
+
+        populate_current_task('fix app', ['app.py'])
+
+        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        scope_pos = content.index('## Scope')
+        files_pos = content.index('## Relevant Files')
+        assert scope_pos < files_pos
 
 
 # ---------------------------------------------------------------------------
