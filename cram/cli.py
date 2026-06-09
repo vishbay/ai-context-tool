@@ -14,6 +14,7 @@ Commands:
   sync        [path]                       Update ARCHITECTURE.md after a commit
   decide      "<decision>" [path]          Append an architectural decision to DECISIONS.md
   gotcha      "<trap>" [path]             Append a non-obvious trap to GOTCHAS.md
+  audit       [--days N] [--all]            Measure orientation tax from Claude Code transcripts
   benchmark   [path]                       Show token savings vs full-repo auto-indexing
   status      [path]                       Show .cram-ai-context/ freshness
   doctor      [path]                       Check setup: models, hooks, git, context files
@@ -52,6 +53,8 @@ def main() -> None:
         from cram.decide import main as _main
     elif cmd == 'gotcha':
         from cram.gotcha import main as _main
+    elif cmd == 'audit':
+        from cram.audit import main as _main
     elif cmd == 'benchmark':
         from cram.benchmark import main as _main
     elif cmd == 'status':
