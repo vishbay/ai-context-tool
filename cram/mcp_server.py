@@ -239,6 +239,65 @@ def get_decisions() -> str:
 
 
 @mcp.tool()
+def propose_decision(text: str, reason: str = '', alternatives: str = '') -> str:
+    """Propose a new architectural decision discovered during this session.
+
+    Appends a [PENDING] entry to DECISIONS.md for owner review. Use this when
+    you discover an invariant, design constraint, or make a significant
+    architectural choice the team should record.
+
+    Args:
+        text: The decision in one sentence ("use JWT over session cookies")
+        reason: Why this decision was made (optional but encouraged)
+        alternatives: What alternatives were considered (optional)
+    """
+    import datetime as _dt
+    from cram.decide import _next_decision_id, DECISIONS_FILE
+    from cram.context_dir import context_path
+
+    if not _repo_root:
+        return 'Error: repo root not configured.'
+
+    path = context_path(_repo_root, DECISIONS_FILE, warn=True)
+    if not os.path.exists(path):
+        return 'DECISIONS.md not found. Run `cram init` first.'
+
+    with open(path) as f:
+        content = f.read()
+
+    decision_id = _next_decision_id(content)
+    today = _dt.date.today().isoformat()
+
+    entry = (
+        f"\n## [{decision_id}] [PENDING] {text}\n"
+        f"- **Date:** {today}\n"
+        f"- **Status:** Pending — proposed by agent, awaiting owner review\n"
+        f"- **Decision:** {text}\n"
+        f"- **Reason:** {reason}\n"
+        f"- **Alternatives considered:** {alternatives}\n"
+    )
+
+    with open(path, 'a') as f:
+        f.write(entry)
+
+    # Log to suggestions.jsonl for TUI visibility
+    suggestions_path = os.path.join(_repo_root, '.ai-context', 'suggestions.jsonl')
+    try:
+        with open(suggestions_path, 'a') as f:
+            import json as _json
+            f.write(_json.dumps({
+                'ts':   _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                'type': 'decision',
+                'id':   decision_id,
+                'text': text,
+            }) + '\n')
+    except OSError:
+        pass
+
+    return f'Added [{decision_id}] to DECISIONS.md with [PENDING] status. Review with `cram ui` or edit the file directly.'
+
+
+@mcp.tool()
 def get_gotchas() -> str:
     """Get known non-obvious traps and foot-guns in this repo.
 

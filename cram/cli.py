@@ -13,19 +13,21 @@ Commands:
   continue    [path]                       Extend grace period — keep context on next commit
   sync        [path]                       Update ARCHITECTURE.md after a commit
   decide      "<decision>" [path]          Append an architectural decision to DECISIONS.md
-  gotcha      "<trap>" [path]             Append a non-obvious trap to GOTCHAS.md
-  audit       [--days N] [--all]            Measure orientation tax from Claude Code transcripts
+  decisions   [--mine] [--days N] [path]   Show decisions; --mine extracts drafts from git log
+  gotcha      "<trap>" [path]              Append a non-obvious trap to GOTCHAS.md
+  audit       [--days N] [--all]           Measure orientation tax from Claude Code transcripts
   benchmark   [path]                       Show token savings vs full-repo auto-indexing
-  status      [path]                       Show .cram-ai-context/ freshness
+  status      [path]                       Show .ai-context/ freshness
   doctor      [path]                       Check setup: models, hooks, git, context files
   vscode      [path] [--force]             Generate .vscode/tasks.json for editor integration
   hook        install|uninstall [path]     Manage the git post-commit hook
   mcp         [--repo PATH]                Start MCP server (stdio) for Claude Code / agents
+  ui          [path]                       Launch TUI dashboard (requires cram-ai[tui])
   menu        [path]                       Launch tray app (requires cram-ai[tray])
   autostart   on|off|status [path]         Start cram-menu automatically at login (macOS)
 
 --target choices: cursor | claude | copilot | codex | windsurf | all
-  Set a default in .cram-ai-context/config.toml:  [task] default_target = "cursor"
+  Set a default in .ai-context/config.toml:  [task] default_target = "cursor"
 """
 
 
@@ -51,6 +53,8 @@ def main() -> None:
         from cram.sync_context import main as _main
     elif cmd == 'decide':
         from cram.decide import main as _main
+    elif cmd == 'decisions':
+        from cram.decisions import main as _main
     elif cmd == 'gotcha':
         from cram.gotcha import main as _main
     elif cmd == 'audit':
@@ -67,6 +71,8 @@ def main() -> None:
         from cram.hooks import main as _main
     elif cmd == 'mcp':
         from cram.mcp_server import main as _main
+    elif cmd == 'ui':
+        from cram.ui import main as _main
     elif cmd == 'menu':
         from cram.tray import main as _main
     elif cmd == 'autostart':

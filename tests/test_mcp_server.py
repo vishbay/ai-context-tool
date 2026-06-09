@@ -335,3 +335,80 @@ class TestUsageLog:
         log_path = repo / CONTEXT_DIR / 'usage.jsonl'
         lines = [l for l in log_path.read_text().strip().splitlines() if l]
         assert len(lines) == 2
+
+
+class TestProposeDecision:
+    def test_appends_pending_entry_to_decisions(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        (repo / CONTEXT_DIR / 'DECISIONS.md').write_text('# Decisions\n')
+
+        result = srv.propose_decision('use JWT over sessions', reason='stateless')
+
+        assert 'DECISION-' in result
+        assert 'PENDING' in result.upper() or 'pending' in result.lower()
+        content = (repo / CONTEXT_DIR / 'DECISIONS.md').read_text()
+        assert '[PENDING]' in content
+        assert 'use JWT over sessions' in content
+        assert 'stateless' in content
+
+    def test_pending_status_line_present(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        (repo / CONTEXT_DIR / 'DECISIONS.md').write_text('# Decisions\n')
+
+        srv.propose_decision('drop Redis', reason='latency')
+
+        content = (repo / CONTEXT_DIR / 'DECISIONS.md').read_text()
+        assert 'Pending' in content
+
+    def test_increments_decision_id(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        decisions_path = repo / CONTEXT_DIR / 'DECISIONS.md'
+        decisions_path.write_text(
+            '# Decisions\n\n## [DECISION-001] first\n- **Status:** Accepted\n'
+        )
+
+        srv.propose_decision('second decision')
+
+        content = decisions_path.read_text()
+        assert '[DECISION-002]' in content
+
+    def test_writes_suggestions_jsonl(self, repo, monkeypatch):
+        import json, cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        (repo / CONTEXT_DIR / 'DECISIONS.md').write_text('# Decisions\n')
+
+        srv.propose_decision('use postgres', reason='reliability')
+
+        log = repo / CONTEXT_DIR / 'suggestions.jsonl'
+        assert log.exists()
+        entry = json.loads(log.read_text().strip())
+        assert entry['type'] == 'decision'
+        assert 'postgres' in entry['text']
+        assert 'ts' in entry
+
+    def test_returns_error_when_no_repo_root(self, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', '')
+        result = srv.propose_decision('some decision')
+        assert 'Error' in result
+
+    def test_returns_error_when_decisions_missing(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        # Don't create DECISIONS.md
+        (repo / CONTEXT_DIR / 'DECISIONS.md').unlink(missing_ok=True)
+        result = srv.propose_decision('some decision')
+        assert 'not found' in result.lower() or 'init' in result.lower()
+
+    def test_alternatives_field_populated(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        (repo / CONTEXT_DIR / 'DECISIONS.md').write_text('# Decisions\n')
+
+        srv.propose_decision('use JWT', reason='stateless', alternatives='sessions, cookies')
+
+        content = (repo / CONTEXT_DIR / 'DECISIONS.md').read_text()
+        assert 'sessions, cookies' in content

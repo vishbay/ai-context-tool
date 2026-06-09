@@ -32,6 +32,7 @@ dependencies = [
 multi-provider = ["litellm>=1.40.0"]
 tray = ["pystray>=0.19.0", "pillow>=10.0", "pywebview>=5.0", "flask>=3.0"]
 mcp = ["mcp>=1.0.0"]
+tui = ["textual>=0.80"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

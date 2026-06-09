@@ -12,7 +12,7 @@ READ_TOOLS  = frozenset({'Read', 'read_file'})
 WRITE_TOOLS = frozenset({'Write', 'Edit', 'edit_file', 'write_file', 'NotebookEdit'})
 BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ')
 
-CONTEXT_DIR = '.cram-ai-context'
+CONTEXT_DIR = '.ai-context'
 
 
 def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
@@ -54,6 +54,7 @@ def _find_usage(obj: object, depth: int = 0) -> list[dict]:
 def _analyze_transcript(path: str) -> dict | None:
     reads = 0
     reads_before_edit = 0
+    edits = 0
     first_edit_seen = False
     cache_writes = 0
     cache_reads = 0
@@ -81,8 +82,10 @@ def _analyze_transcript(path: str) -> dict | None:
                         reads += 1
                         if not first_edit_seen:
                             reads_before_edit += 1
-                    if is_write and not first_edit_seen:
-                        first_edit_seen = True
+                    if is_write:
+                        edits += 1
+                        if not first_edit_seen:
+                            first_edit_seen = True
 
                 for u in _find_usage(msg):
                     cache_writes += u.get('cache_creation_input_tokens', 0)
@@ -91,9 +94,12 @@ def _analyze_transcript(path: str) -> dict | None:
     except Exception:
         return None
 
+    ratio = reads_before_edit / max(edits, 1)
     return {
         'reads':             reads,
         'reads_before_edit': reads_before_edit,
+        'edits':             edits,
+        'ratio':             ratio,
         'cache_writes':      cache_writes,
         'cache_reads':       cache_reads,
         'mtime':             os.path.getmtime(path),
@@ -166,6 +172,8 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> Non
     total     = len(all_sessions)
     avg_reads = sum(s['reads'] for s in all_sessions) / total
     avg_rbe   = sum(s['reads_before_edit'] for s in all_sessions) / total
+    avg_edits = sum(s['edits'] for s in all_sessions) / total
+    avg_ratio = sum(s['ratio'] for s in all_sessions) / total
     avg_cw    = sum(s['cache_writes'] for s in all_sessions) / total
 
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
@@ -176,15 +184,27 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> Non
     sessions_per_month = total / (days / 30)
     monthly_orient_cost = orient_cost_per_session * sessions_per_month * 30
 
+    # Read-to-edit ratio benchmark
+    if avg_ratio < 2.0:
+        ratio_label = '✓ good'
+    elif avg_ratio < 5.0:
+        ratio_label = '~ normal'
+    else:
+        ratio_label = '⚠ high — context may not be landing'
+
     print(f"\nOrientation tax audit — last {days} days\n")
     print(f"  Sessions analysed:              {total}")
     print(f"  Avg reads/session:              {avg_reads:.1f}")
     print(f"  Avg reads before first edit:    {avg_rbe:.1f}  ← primary metric")
+    print(f"  Avg edits/session:              {avg_edits:.1f}")
+    print(f"  Avg read-to-edit ratio:         {avg_ratio:.1f}×  {ratio_label}")
     print(f"  Avg cache writes/session:       {avg_cw:,.0f} tokens")
     print()
     print(f"  Est. orientation tokens/session: ~{orient_tok_per_session:,.0f}")
     print(f"  Est. orientation cost/session:   ~${orient_cost_per_session:.4f}  (Sonnet, base input)")
     print(f"  Est. monthly orientation tax:    ~${monthly_orient_cost:.2f}  ({sessions_per_month:.0f} sessions/month)")
+    print()
+    print(f"  Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing")
 
     if all_projects and len(project_summaries) > 1:
         print(f"\n  Per-project breakdown:")
