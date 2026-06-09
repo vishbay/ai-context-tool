@@ -8,7 +8,12 @@ from cram.targets import (
     save_default_target,
     detect_targets,
     write_to_target,
+    load_custom_targets,
+    get_effective_targets,
+    get_effective_indicators,
     TARGET_FILES,
+    CRAM_SECTION_START,
+    CRAM_SECTION_END,
 )
 
 CONTEXT_DIR = '.ai-context'
@@ -133,3 +138,112 @@ class TestWriteToTarget:
     def test_raises_on_unknown_target(self, tmp_path):
         with pytest.raises(ValueError, match='Unknown target'):
             write_to_target(str(tmp_path), 'nonexistent', '')
+
+    def test_gemini_target_upserts_markers(self, tmp_path):
+        path = write_to_target(str(tmp_path), 'gemini', 'task text')
+        assert path.endswith('GEMINI.md')
+        content = open(path).read()
+        assert CRAM_SECTION_START in content
+        assert CRAM_SECTION_END in content
+        assert 'task text' in content
+
+    def test_gemini_preserves_user_content(self, tmp_path):
+        gemini_md = tmp_path / 'GEMINI.md'
+        gemini_md.write_text('# My config\nuser content here\n')
+        write_to_target(str(tmp_path), 'gemini', 'new task')
+        content = gemini_md.read_text()
+        assert 'user content here' in content
+        assert 'new task' in content
+
+
+class TestCustomTargets:
+    def _write_config(self, tmp_path, toml_content: str):
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        (ctx / 'config.toml').write_text(toml_content)
+
+    def test_load_custom_target_basic(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        custom = load_custom_targets(str(tmp_path))
+        assert 'aura' in custom
+        assert custom['aura']['file'] == 'AURA.md'
+        assert custom['aura']['indicator'] is None
+        assert custom['aura']['upsert'] is False
+
+    def test_load_custom_target_with_all_fields(self, tmp_path):
+        self._write_config(tmp_path, (
+            '[targets.aura]\n'
+            'file = "AURA.md"\n'
+            'indicator = "aura.config.json"\n'
+            'upsert = true\n'
+        ))
+        custom = load_custom_targets(str(tmp_path))
+        assert custom['aura']['indicator'] == 'aura.config.json'
+        assert custom['aura']['upsert'] is True
+
+    def test_load_custom_target_no_file_skipped(self, tmp_path):
+        self._write_config(tmp_path, '[targets.bad]\nindicator = "x.json"\n')
+        custom = load_custom_targets(str(tmp_path))
+        assert 'bad' not in custom
+
+    def test_get_effective_targets_merges(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        effective = get_effective_targets(str(tmp_path))
+        assert 'aura' in effective
+        assert effective['aura'] == 'AURA.md'
+        assert 'cursor' in effective  # builtin still present
+
+    def test_get_effective_indicators_custom_with_indicator(self, tmp_path):
+        self._write_config(tmp_path, (
+            '[targets.aura]\n'
+            'file = "AURA.md"\n'
+            'indicator = "aura.config.json"\n'
+        ))
+        indicators = get_effective_indicators(str(tmp_path))
+        assert indicators.get('aura') == 'aura.config.json'
+
+    def test_get_effective_indicators_custom_without_indicator(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        indicators = get_effective_indicators(str(tmp_path))
+        assert 'aura' not in indicators
+
+    def test_detect_custom_target_via_indicator(self, tmp_path):
+        self._write_config(tmp_path, (
+            '[targets.aura]\n'
+            'file = "AURA.md"\n'
+            'indicator = "aura.config.json"\n'
+        ))
+        (tmp_path / 'aura.config.json').write_text('{}')
+        detected = detect_targets(str(tmp_path))
+        assert 'aura' in detected
+
+    def test_write_to_custom_target_overwrite_by_default(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        path = write_to_target(str(tmp_path), 'aura', 'my task')
+        assert path.endswith('AURA.md')
+        content = open(path).read()
+        assert 'my task' in content
+        assert CRAM_SECTION_START not in content
+
+    def test_write_to_custom_target_upsert_when_flagged(self, tmp_path):
+        self._write_config(tmp_path, (
+            '[targets.aura]\n'
+            'file = "AURA.md"\n'
+            'upsert = true\n'
+        ))
+        (tmp_path / 'AURA.md').write_text('# User content\n')
+        path = write_to_target(str(tmp_path), 'aura', 'injected task')
+        content = open(path).read()
+        assert '# User content' in content
+        assert CRAM_SECTION_START in content
+        assert 'injected task' in content
+
+    def test_write_to_custom_target_unknown_raises(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        with pytest.raises(ValueError, match='Unknown target'):
+            write_to_target(str(tmp_path), 'nonexistent', '')
+
+    def test_save_load_custom_target_as_default(self, tmp_path):
+        self._write_config(tmp_path, '[targets.aura]\nfile = "AURA.md"\n')
+        save_default_target(str(tmp_path), 'aura')
+        assert load_default_target(str(tmp_path)) == 'aura'

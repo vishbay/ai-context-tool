@@ -316,11 +316,20 @@ def _call_via_litellm(prompt: str, model: str) -> str:
         )
         sys.exit(1)
 
-    response = litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500,
-    )
+    proxy = load_settings().get('proxy', {})
+    kwargs: dict = {
+        'model':      model,
+        'messages':   [{"role": "user", "content": prompt}],
+        'max_tokens': 1500,
+    }
+    if proxy.get('base_url'):
+        kwargs['api_base'] = proxy['base_url']
+        # Keyless gateways (SSO/corp token) need a dummy key so litellm doesn't abort
+        kwargs['api_key'] = proxy.get('api_key') or 'no-key'
+    if proxy.get('headers'):
+        kwargs['extra_headers'] = dict(proxy['headers'])
+
+    response = litellm.completion(**kwargs)
     return response.choices[0].message.content.strip()
 
 

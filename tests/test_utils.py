@@ -105,3 +105,79 @@ class TestCallViaLitellmMissing:
             with pytest.raises(SystemExit):
                 from cram.utils import _call_via_litellm
                 _call_via_litellm("hi", "openai/gpt-4o-mini")
+
+
+class TestProxyHeaders:
+    """proxy.base_url and proxy.headers thread through to litellm.completion."""
+
+    def _make_litellm_mock(self):
+        mock_litellm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = 'response text'
+        mock_litellm.completion.return_value = mock_response
+        return mock_litellm
+
+    def test_proxy_base_url_sets_api_base(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        settings = {'proxy': {'base_url': 'https://gateway.corp/v1'}}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert call_kwargs['api_base'] == 'https://gateway.corp/v1'
+
+    def test_proxy_base_url_uses_dummy_key_when_no_api_key(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        settings = {'proxy': {'base_url': 'https://gateway.corp/v1'}}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert call_kwargs['api_key'] == 'no-key'
+
+    def test_proxy_api_key_used_when_provided(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        settings = {'proxy': {'base_url': 'https://gateway.corp/v1', 'api_key': 'mytoken'}}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert call_kwargs['api_key'] == 'mytoken'
+
+    def test_proxy_headers_set_as_extra_headers(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        settings = {'proxy': {
+            'base_url': 'https://gateway.corp/v1',
+            'headers': {'X-Corp-Token': 'abc123', 'X-Tenant': 'acme'},
+        }}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert call_kwargs['extra_headers'] == {'X-Corp-Token': 'abc123', 'X-Tenant': 'acme'}
+
+    def test_no_proxy_config_no_extra_kwargs(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        with patch('cram.utils.load_settings', return_value={}):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert 'api_base' not in call_kwargs
+        assert 'extra_headers' not in call_kwargs
+        assert 'api_key' not in call_kwargs
+
+    def test_headers_without_base_url_still_applied(self, tmp_path):
+        from cram.utils import _call_via_litellm
+        mock_litellm = self._make_litellm_mock()
+        settings = {'proxy': {'headers': {'Authorization': 'Bearer tok'}}}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch.dict('sys.modules', {'litellm': mock_litellm}):
+                _call_via_litellm('hello', 'openai/gpt-4o')
+        call_kwargs = mock_litellm.completion.call_args[1]
+        assert call_kwargs['extra_headers'] == {'Authorization': 'Bearer tok'}
+        assert 'api_base' not in call_kwargs

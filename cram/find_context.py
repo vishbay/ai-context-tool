@@ -425,6 +425,11 @@ def find_context(task: str, target: str | None = None, inject: bool = False, roo
         with open(task_path) as fh:
             task_content = fh.read()
         root = _find_git_root(os.getcwd())
+        effective = _targets.get_effective_targets(root)
+        if target != 'all' and target not in effective:
+            valid = ', '.join(sorted(effective)) + ', all'
+            print(f"Error: unknown target '{target}'. Valid: {valid}", file=sys.stderr)
+            sys.exit(1)
         if target == 'all':
             written = _targets.write_to_all_detected(root, task_content, arch_content)
             for p in written:
@@ -472,12 +477,12 @@ def main() -> None:
     parser.add_argument('task', nargs='+', help='Task description')
     parser.add_argument(
         '--target',
-        choices=[*_targets.TARGET_FILES, 'all'],
         default=None,
         metavar='TARGET',
         help=(
             'Auto-load context into the tool\'s instruction file. '
-            f"Choices: {', '.join(_targets.TARGET_FILES)} | all. "
+            f"Builtins: {', '.join(_targets.TARGET_FILES)} | all. "
+            'Custom targets from .ai-context/config.toml [targets.<name>] are also accepted. '
             'Falls back to default_target in .ai-context/config.toml.'
         ),
     )

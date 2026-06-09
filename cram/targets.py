@@ -39,8 +39,9 @@ TARGET_FILES: dict[str, str] = {
     "cursor":   ".cursor/rules/cram-task.md",      # Cursor reads all files in .cursor/rules/
     "claude":   "CLAUDE.md",                        # Claude Code reads CLAUDE.md from the project root
     "copilot":  ".github/cram-task.md",             # Requires one-time include in copilot-instructions.md
-    "codex":    "AGENTS.md",                          # Codex reads AGENTS.md from the repo root
-    "windsurf": ".windsurf/rules/cram-task.md",     # Windsurf reads all files in .windsurf/rules/
+    "codex":    "AGENTS.md",                        # Codex reads AGENTS.md from the repo root
+    "windsurf": ".windsurf/rules/cram-task.md",    # Windsurf reads all files in .windsurf/rules/
+    "gemini":   "GEMINI.md",                       # Gemini CLI reads GEMINI.md from the project root
 }
 
 # File or directory whose presence indicates the tool is active in the repo
@@ -50,7 +51,56 @@ TARGET_INDICATORS: dict[str, str] = {
     "copilot":  ".github",
     "codex":    "AGENTS.md",
     "windsurf": ".windsurfrules",
+    "gemini":   "GEMINI.md",
 }
+
+# Targets that share a user-owned file — use cram markers to preserve user content
+_UPSERT_TARGETS = frozenset({"claude", "codex", "gemini"})
+
+
+def load_custom_targets(root: str) -> dict[str, dict]:
+    """Load [targets.<name>] sections from config.toml.
+
+    Each section may contain:
+      file      = "AURA.md"           (required) path relative to repo root
+      indicator = "aura.config.json"  (optional) file/dir that signals tool is active
+      upsert    = true                (optional) use cram markers instead of overwriting
+
+    Returns {name: {file, indicator, upsert}}.
+    """
+    config_path = os.path.join(resolve_context_dir(root), 'config.toml')
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, 'rb') as f:
+            cfg = tomllib.load(f)
+        custom: dict[str, dict] = {}
+        for name, val in cfg.get('targets', {}).items():
+            if isinstance(val, dict) and val.get('file'):
+                custom[name] = {
+                    'file':      str(val['file']),
+                    'indicator': str(val['indicator']) if val.get('indicator') else None,
+                    'upsert':    bool(val.get('upsert', False)),
+                }
+        return custom
+    except Exception:
+        return {}
+
+
+def get_effective_targets(root: str) -> dict[str, str]:
+    """Return merged {name: file_path} for builtins + custom targets."""
+    merged = dict(TARGET_FILES)
+    merged.update({n: d['file'] for n, d in load_custom_targets(root).items()})
+    return merged
+
+
+def get_effective_indicators(root: str) -> dict[str, str]:
+    """Return merged {name: indicator} for builtins + custom targets that declare one."""
+    merged = dict(TARGET_INDICATORS)
+    for name, d in load_custom_targets(root).items():
+        if d.get('indicator'):
+            merged[name] = d['indicator']
+    return merged
 
 
 def load_output_config(root: str) -> dict:
@@ -100,7 +150,7 @@ def load_default_target(root: str) -> str | None:
         with open(config_path, 'rb') as f:
             cfg = tomllib.load(f)
         val = cfg.get('task', {}).get('default_target')
-        return val if val in {*TARGET_FILES, 'all'} else None
+        return val if val in {*get_effective_targets(root), 'all'} else None
     except Exception:
         return None
 
@@ -112,7 +162,7 @@ def save_default_target(root: str, target: str) -> None:
     Preserves all other content already in config.toml.
     """
     import re
-    if target not in {*TARGET_FILES, 'all'}:
+    if target not in {*get_effective_targets(root), 'all'}:
         return
     config_path = os.path.join(resolve_context_dir(root), 'config.toml')
     content = ''
@@ -152,7 +202,7 @@ def save_default_target(root: str, target: str) -> None:
 
 def detect_targets(root: str) -> list[str]:
     """Return names of tools whose indicator file/dir exists in the repo."""
-    return [t for t, ind in TARGET_INDICATORS.items()
+    return [t for t, ind in get_effective_indicators(root).items()
             if os.path.exists(os.path.join(root, ind))]
 
 
@@ -222,19 +272,26 @@ def write_to_target(root: str, target: str, task_content: str, arch_content: str
     For the claude target, writes a pointer-only CLAUDE.md by default (inject=False).
     Pass inject=True to write task_content instead (backward compat for --inject flag).
     """
-    rel = TARGET_FILES.get(target)
+    custom_targets = load_custom_targets(root)
+    effective_files = get_effective_targets(root)
+
+    rel = effective_files.get(target)
     if not rel:
-        raise ValueError(f"Unknown target '{target}'. Valid: {', '.join(TARGET_FILES)}")
+        raise ValueError(f"Unknown target '{target}'. Valid: {', '.join(effective_files)}")
 
     path = os.path.join(root, rel)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
     output_cfg = load_output_config(root)
+
+    # Determine whether to use marker-based upsert (preserves user content outside markers)
+    use_upsert = (target in _UPSERT_TARGETS) or \
+                 (target in custom_targets and custom_targets[target].get('upsert', False))
+
     if target == 'claude' and not inject:
         pointer = CLAUDE_MCP_POINTER.replace('/absolute/path/to/this/repo', root)
         _upsert_cram_section(path, pointer)
-    elif target in ('claude', 'codex'):
-        # Shared user files — use markers to preserve content outside the cram block
+    elif use_upsert:
         content = _render(target, task_content, arch_content, output_cfg)
         _upsert_cram_section(path, content)
     else:
