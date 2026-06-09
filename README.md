@@ -265,13 +265,16 @@ pip install 'cram-ai[tui]'
 cram ui
 ```
 
-Three tabs:
+Four tabs:
 
 - **Decisions** (default) — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
 - **Sessions** — recent Claude Code sessions with reads, edits, and read-to-edit ratio.
   Ratio > 5× is flagged — context isn't landing for those sessions.
 - **Health** — staleness score, per-file token budgets, active task slots.
+- **History** — recent `cram task` invocations with timestamps. This is a recall aid
+  ("what was I working on last Tuesday?"), not a project management tool — there are no
+  lifecycle states, completion tracking, or status transitions.
 
 Auto-refreshes every 30 seconds. `r` forces a refresh, `q` quits.
 
@@ -368,6 +371,25 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 | `GOTCHAS.md` | 400 tok | `CRAM_BUDGET_GOTCHAS` |
 | `CURRENT_TASK.md` | 800 tok | `CRAM_BUDGET_TASK` |
 | `SYMBOLS.md` | no budget | scales with repo size |
+
+---
+
+## Team and concurrency
+
+cram is designed for **one developer, one repo checkout**. Context files live in
+`.ai-context/` which is typically gitignored, so each developer works with their own
+independent context.
+
+| Scenario | Works? |
+|---|---|
+| One developer, one agent | Yes — designed for this |
+| One developer, parallel agents (same session) | Yes — each `get_context()` call gets its own slot under `.ai-context/tasks/` |
+| Multiple developers, separate checkouts | Independent — no sharing or coordination |
+| Multiple developers wanting shared context | Not supported |
+
+The slot system protects against concurrent MCP calls within a single server process. It is
+**not** a collaboration feature — there is no shared state, sync, or conflict resolution
+across different checkouts or machines.
 
 ---
 

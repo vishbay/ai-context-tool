@@ -55,8 +55,17 @@ def _archive_current_task() -> None:
             return
         # Extract task description
         task = ''
-        for line in content.splitlines():
+        lines = content.splitlines()
+        for i, line in enumerate(lines):
             s = line.strip()
+            if s == '## Task':
+                # Task description is on the next non-blank line
+                for j in range(i + 1, len(lines)):
+                    candidate = lines[j].strip()
+                    if candidate and not candidate.startswith('#'):
+                        task = candidate
+                        break
+                break
             if s.startswith('# Task:'):
                 task = s[len('# Task:'):].strip()
                 break
