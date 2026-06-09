@@ -152,7 +152,7 @@ class TestFindRelevantFiles:
 class TestPopulateCurrentTask:
     def test_inlines_existing_file_content(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        ctx = tmp_path / '.cram-ai-context'
+        ctx = tmp_path / '.ai-context'
         ctx.mkdir()
         src = tmp_path / 'utils.py'
         src.write_text('def helper(): pass\n')
@@ -164,30 +164,56 @@ class TestPopulateCurrentTask:
         assert 'fix bug' in content
         assert 'def helper(): pass' in content
 
+    def test_output_path_writes_to_custom_location(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        src = tmp_path / 'utils.py'
+        src.write_text('def helper(): pass\n')
+        custom = tmp_path / '.ai-context' / 'tasks' / 'my-slot.md'
+
+        populate_current_task('fix bug', ['utils.py'], output_path=str(custom))
+
+        assert custom.exists()
+        assert 'fix bug' in custom.read_text()
+        assert 'def helper' in custom.read_text()
+        # Default CURRENT_TASK.md should NOT be written
+        assert not (ctx / 'CURRENT_TASK.md').exists()
+
+    def test_output_path_creates_parent_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / '.ai-context').mkdir()
+        (tmp_path / 'main.py').write_text('# main\n')
+        deep = tmp_path / 'deep' / 'nested' / 'slot.md'
+
+        populate_current_task('task', ['main.py'], output_path=str(deep))
+
+        assert deep.exists()
+
     def test_notes_missing_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
 
         found = populate_current_task('task', ['ghost.py'])
 
         assert found == []
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert 'ghost.py' in content
         assert 'not found' in content
 
     def test_uses_correct_code_fence_for_extension(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'app.ts').write_text('const x = 1;\n')
 
         populate_current_task('task', ['app.ts'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '```ts' in content
 
     def test_handles_mixed_existing_and_missing(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'real.py').write_text('# real\n')
 
         found = populate_current_task('task', ['real.py', 'fake.py'])
@@ -258,67 +284,67 @@ class TestScoreFiles:
 class TestContractFields:
     def test_scope_derived_from_found_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'cram').mkdir()
         (tmp_path / 'cram' / 'utils.py').write_text('def helper(): pass\n')
 
         populate_current_task('refactor helpers', ['cram/utils.py'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '## Scope' in content
         assert '- cram/' in content
 
     def test_out_of_scope_placeholder_present(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'main.py').write_text('# main\n')
 
         populate_current_task('fix main', ['main.py'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '## Out of Scope' in content
         assert '<!--' in content
 
     def test_definition_of_done_placeholder_present(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'main.py').write_text('# main\n')
 
         populate_current_task('fix main', ['main.py'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '## Definition of Done' in content
 
     def test_scope_repo_root_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'main.py').write_text('# main\n')
 
         populate_current_task('fix main', ['main.py'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '## Scope' in content
         assert '- .' in content  # repo root shown as '.'
 
     def test_scope_empty_when_no_files_found(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
 
         populate_current_task('task', ['ghost.py'])  # file doesn't exist
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         assert '## Scope' in content
         # No dirs from missing files — shows placeholder
         assert 'Populated after' in content or '## Out of Scope' in content
 
     def test_contract_sections_before_relevant_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         (tmp_path / 'app.py').write_text('# app\n')
 
         populate_current_task('fix app', ['app.py'])
 
-        content = (tmp_path / '.cram-ai-context' / 'CURRENT_TASK.md').read_text()
+        content = (tmp_path / '.ai-context' / 'CURRENT_TASK.md').read_text()
         scope_pos = content.index('## Scope')
         files_pos = content.index('## Relevant Files')
         assert scope_pos < files_pos
@@ -336,7 +362,7 @@ class TestFindContext:
 
     def test_warns_if_architecture_missing(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
-        (tmp_path / '.cram-ai-context').mkdir()
+        (tmp_path / '.ai-context').mkdir()
         # No ARCHITECTURE.md created — should warn but not crash
 
         with patch('cram.find_context.call_model', return_value=''):
@@ -345,6 +371,35 @@ class TestFindContext:
         assert 'Warning' in capsys.readouterr().err
 
     def test_full_flow_with_mocked_model(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        (ctx / 'ARCHITECTURE.md').write_text('# Arch')
+        (ctx / 'DECISIONS.md').write_text('# Dec')
+        (tmp_path / 'main.py').write_text('print("hello")\n')
+
+        with patch('cram.find_context.call_model', return_value='main.py'):
+            find_context('fix the print')
+
+        content = (ctx / 'CURRENT_TASK.md').read_text()
+        assert 'fix the print' in content
+        assert 'print("hello")' in content
+
+    def test_root_param_scopes_path_resolution(self, tmp_path, monkeypatch):
+        # Files only exist inside tmp_path; resolving with root=str(tmp_path) should find them
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        (ctx / 'ARCHITECTURE.md').write_text('# Arch')
+        (tmp_path / 'util.py').write_text('def helper(): pass\n')
+
+        # Without chdir — use explicit root to resolve
+        with patch('cram.find_context.call_model', return_value='util.py'):
+            result = find_relevant_files('fix helper', '# Arch', root=str(tmp_path))
+
+        paths = [f for f, _ in result]
+        assert 'util.py' in paths
+
+    def test_legacy_context_dir_still_works(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         ctx = tmp_path / '.cram-ai-context'
         ctx.mkdir()

@@ -5,6 +5,20 @@ const badge      = document.getElementById('badge');
 const output     = document.getElementById('output');
 const outputWrap = document.getElementById('output-wrap');
 
+// Per-process CSRF token — fetched once at startup
+let _csrfToken = '';
+async function _initToken() {
+  try {
+    const res = await fetch('/token');
+    const data = await res.json();
+    _csrfToken = data.token || '';
+  } catch { /* tray not ready yet — token stays empty, requests will 403 */ }
+}
+
+function _authHeaders(extra = {}) {
+  return { 'Content-Type': 'application/json', 'X-Cram-Token': _csrfToken, ...extra };
+}
+
 // Window size constants
 const HEIGHT_COMPACT = 52;
 const WIDTH_DEFAULT  = 320;
@@ -228,7 +242,7 @@ async function setRepo(path) {
   try {
     const res  = await fetch('/set-repo', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _authHeaders(),
       body:    JSON.stringify({ path }),
     });
     const data = await res.json();
@@ -321,7 +335,7 @@ function hideBranchAlert() {
 
 async function dismissBranchAlert() {
   hideBranchAlert();
-  fetch('/dismiss-branch-alert', { method: 'POST' }).catch(() => {});
+  fetch('/dismiss-branch-alert', { method: 'POST', headers: _authHeaders() }).catch(() => {});
 }
 
 function _formatCost(val) {
@@ -440,6 +454,7 @@ async function fetchMeasured() {
 }
 
 async function refresh() {
+  if (!_csrfToken) await _initToken();
   await Promise.all([fetchStatus(), fetchMetrics(), fetchRepo()]);
   updateHint(_lastState, _hasRecentTask);
   fetchSuggestion();
@@ -451,7 +466,7 @@ async function refresh() {
 async function _readStream(url, body, onLine, onDone) {
   const res = await fetch(url, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: _authHeaders(),
     body:    JSON.stringify(body),
   });
   const reader  = res.body.getReader();
@@ -598,7 +613,7 @@ async function disableSuggestion() {
   try {
     await fetch('/settings', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _authHeaders(),
       body:    JSON.stringify({ auto_suggest: false }),
     });
     const tog = document.getElementById('auto-suggest-toggle');
@@ -611,7 +626,7 @@ async function toggleAutoSuggest(checkbox) {
   try {
     await fetch('/settings', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _authHeaders(),
       body:    JSON.stringify({ auto_suggest: enabled }),
     });
   } catch {}
@@ -722,7 +737,7 @@ function cramOpenFolder() {
   if (window.pywebview?.api?.open_folder) {
     window.pywebview.api.open_folder();
   } else {
-    fetch('/open-folder', { method: 'POST' });
+    fetch('/open-folder', { method: 'POST', headers: _authHeaders() });
   }
 }
 
@@ -736,7 +751,7 @@ function cramQuit() {
   if (window.pywebview?.api?.quit) {
     window.pywebview.api.quit();
   } else {
-    fetch('/quit', { method: 'POST' });
+    fetch('/quit', { method: 'POST', headers: _authHeaders() });
   }
 }
 

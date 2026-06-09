@@ -14,8 +14,15 @@ Configure in .claude/settings.json:
 """
 
 from __future__ import annotations
+import datetime
+import json
 import os
+import re
 import sys
+import threading
+import time
+
+from cram.context_dir import CONTEXT_DIR, context_path, has_context_dir
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -26,14 +33,45 @@ except ImportError:
     )
     sys.exit(1)
 
-CONTEXT_DIR = '.cram-ai-context'
-
 # Resolved at startup — see main()
 _repo_root: str = ''
+# Serializes os.chdir() calls across concurrent tool invocations
+_chdir_lock = threading.Lock()
+
+
+def _task_slug(task: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', task.lower())[:40].strip('-')
+    return slug or 'unnamed'
+
+
+def _cleanup_stale_slots(tasks_dir: str, max_age: int = 86400) -> None:
+    try:
+        cutoff = time.time() - max_age
+        for fname in os.listdir(tasks_dir):
+            fpath = os.path.join(tasks_dir, fname)
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+                os.remove(fpath)
+    except Exception:
+        pass
+
+
+def _log_usage(task: str, tokens: int, source: str) -> None:
+    try:
+        log_path = _ctx_path('usage.jsonl')
+        entry = {
+            'ts':     datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'task':   task,
+            'tokens': tokens,
+            'source': source,
+        }
+        with open(log_path, 'a') as lf:
+            lf.write(json.dumps(entry) + '\n')
+    except Exception:
+        pass
 
 
 def _ctx_path(filename: str) -> str:
-    return os.path.join(_repo_root, CONTEXT_DIR, filename)
+    return context_path(_repo_root, filename, warn=True)
 
 
 def _read(filename: str) -> str:
@@ -77,7 +115,7 @@ def get_context(task: str = '') -> str:
     if not _repo_root:
         return 'Error: repo root not configured.'
 
-    if not os.path.isdir(os.path.join(_repo_root, CONTEXT_DIR)):
+    if not has_context_dir(_repo_root):
         return f'Error: {CONTEXT_DIR}/ not found in {_repo_root}. Run `cram init` first.'
 
     if not task:
@@ -101,38 +139,52 @@ def get_context(task: str = '') -> str:
                 content = header + content
         except Exception:
             pass
+        _log_usage('', len(content) // 4, 'reload')
         return content
 
-    # Run find_context in the repo directory
+    # Each task gets its own slot file — concurrent agents don't stomp each other
+    slug       = _task_slug(task)
+    tasks_dir  = os.path.join(_repo_root, CONTEXT_DIR, 'tasks')
+    slot_path  = os.path.join(tasks_dir, f'{slug}.md')
+
+    # Run find_context in the repo directory; lock serializes os.chdir across concurrent calls
     orig_dir = os.getcwd()
-    try:
-        os.chdir(_repo_root)
-        from cram.find_context import find_relevant_files, populate_current_task
-        from cram.utils import get_model_recommendations
+    with _chdir_lock:
+        try:
+            os.chdir(_repo_root)
+            from cram.find_context import find_relevant_files, populate_current_task
+            from cram.utils import get_model_recommendations
 
-        arch      = _read('ARCHITECTURE.md')
-        decisions = _read('DECISIONS.md')
-        gotchas   = _read('GOTCHAS.md')
-        symbols   = _read('SYMBOLS.md')
+            arch      = _read('ARCHITECTURE.md')
+            decisions = _read('DECISIONS.md')
+            gotchas   = _read('GOTCHAS.md')
+            symbols   = _read('SYMBOLS.md')
 
-        ctx_model, coding_model = get_model_recommendations()
-        file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas)
+            ctx_model, coding_model = get_model_recommendations()
+            file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas,
+                                               root=_repo_root)
 
-        if not file_entries:
-            return (
-                f"# Task: {task}\n\n"
-                "No relevant files identified. "
-                "Check that ARCHITECTURE.md and SYMBOLS.md describe the repo structure.\n\n"
-                f"## Architecture\n{arch}"
-            )
+            if not file_entries:
+                return (
+                    f"# Task: {task}\n\n"
+                    "No relevant files identified. "
+                    "Check that ARCHITECTURE.md and SYMBOLS.md describe the repo structure.\n\n"
+                    f"## Architecture\n{arch}"
+                )
 
-        populate_current_task(task, file_entries, ctx_model, coding_model)
+            os.makedirs(tasks_dir, exist_ok=True)
+            populate_current_task(task, file_entries, ctx_model, coding_model,
+                                  output_path=slot_path)
+            _cleanup_stale_slots(tasks_dir)
 
-        with open(_ctx_path('CURRENT_TASK.md')) as f:
-            return f.read()
+            with open(slot_path) as f:
+                content = f.read()
 
-    finally:
-        os.chdir(orig_dir)
+            _log_usage(task, len(content) // 4, 'generate')
+            return content
+
+        finally:
+            os.chdir(orig_dir)
 
 
 @mcp.tool()
@@ -259,25 +311,26 @@ def add_file(path: str, identifiers: str = '') -> str:
         return 'Error: repo root not configured.'
 
     orig_dir = os.getcwd()
-    try:
-        os.chdir(_repo_root)
-        import io
-        from contextlib import redirect_stdout
-        from cram.add_context import add_files
+    with _chdir_lock:
+        try:
+            os.chdir(_repo_root)
+            import io
+            from contextlib import redirect_stdout
+            from cram.add_context import add_files
 
-        spec = f'{path} | {identifiers}' if identifiers.strip() else path
-        buf  = io.StringIO()
-        with redirect_stdout(buf):
-            ok = add_files([spec], replace=False)
+            spec = f'{path} | {identifiers}' if identifiers.strip() else path
+            buf  = io.StringIO()
+            with redirect_stdout(buf):
+                ok = add_files([spec], replace=False)
 
-        output = buf.getvalue()
-        if ok:
-            with open(_ctx_path('CURRENT_TASK.md')) as f:
-                content = f.read()
-            return output.rstrip() + '\n\n' + content
-        return output or f'Could not add {path} — check the file exists and a session is active.'
-    finally:
-        os.chdir(orig_dir)
+            output = buf.getvalue()
+            if ok:
+                with open(_ctx_path('CURRENT_TASK.md')) as f:
+                    content = f.read()
+                return output.rstrip() + '\n\n' + content
+            return output or f'Could not add {path} — check the file exists and a session is active.'
+        finally:
+            os.chdir(orig_dir)
 
 
 @mcp.tool()
@@ -322,7 +375,7 @@ def main() -> None:
     _repo_root = find_git_root(start)
 
     # Validate the repo has been initialised
-    if not os.path.isdir(os.path.join(_repo_root, CONTEXT_DIR)):
+    if not has_context_dir(_repo_root):
         print(
             f"Warning: {CONTEXT_DIR}/ not found in {_repo_root}. "
             "Run `cram init` before using the MCP server.",

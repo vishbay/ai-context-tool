@@ -11,7 +11,7 @@ from cram.targets import (
     TARGET_FILES,
 )
 
-CONTEXT_DIR = '.cram-ai-context'
+CONTEXT_DIR = '.ai-context'
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +71,13 @@ class TestSaveLoadDefaultTarget:
         os.makedirs(tmp_path / CONTEXT_DIR)
         assert load_default_target(str(tmp_path)) is None
 
+    def test_loads_default_target_from_legacy_context_dir(self, tmp_path):
+        legacy = tmp_path / '.cram-ai-context'
+        legacy.mkdir()
+        (legacy / 'config.toml').write_text('[task]\ndefault_target = "cursor"\n')
+
+        assert load_default_target(str(tmp_path)) == 'cursor'
+
 
 # ---------------------------------------------------------------------------
 # detect_targets
@@ -97,8 +104,27 @@ class TestWriteToTarget:
     def test_creates_file_for_cursor(self, tmp_path):
         path = write_to_target(str(tmp_path), 'cursor', '# Task\n')
         assert os.path.exists(path)
-        with open(path) as f:
-            assert f.read() == '# Task\n'
+        content = open(path).read()
+        assert '# Task\n' in content
+        assert 'Command Output Protection' in content
+        assert 'head -c 6000' in content
+
+    def test_all_targets_include_byte_cap_section(self, tmp_path):
+        non_claude = [t for t in TARGET_FILES if t != 'claude']
+        for target in non_claude:
+            path = write_to_target(str(tmp_path), target, '# Task\n')
+            content = open(path).read()
+            assert 'Command Output Protection' in content, f'{target} missing byte-cap section'
+            assert 'head -c 6000' in content, f'{target} missing head -c 6000'
+
+    def test_byte_cap_respects_config_override(self, tmp_path):
+        cfg_dir = tmp_path / '.ai-context'
+        cfg_dir.mkdir()
+        (cfg_dir / 'config.toml').write_text('[output]\nbyte_cap = 3000\n')
+        path = write_to_target(str(tmp_path), 'cursor', '# Task\n')
+        content = open(path).read()
+        assert 'head -c 3000' in content
+        assert 'head -c 6000' not in content
 
     def test_creates_parent_dirs(self, tmp_path):
         path = write_to_target(str(tmp_path), 'windsurf', 'content')

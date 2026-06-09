@@ -1,4 +1,4 @@
-"""One-time setup: scans a repo, generates initial .cram-ai-context/ files via Haiku."""
+"""One-time setup: scans a repo, generates initial .ai-context/ files via Haiku."""
 
 import os
 import sys
@@ -7,12 +7,13 @@ import fnmatch
 from cram.utils import call_model, strip_code_fence
 from cram.hooks import install_hook, install_checkout_hook, install_global_claude_md, install_claude_code_hooks
 from cram.symbols import write_symbols_md
-from cram.targets import write_to_target
+from cram.targets import write_to_target, _byte_cap_block
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, canonical_context_dir, legacy_context_dir
 
 EXCLUDE_DIRS = {
     'node_modules', 'dist', 'build', '__pycache__',
     '.git', '.venv', 'venv', 'coverage', '.next',
-    '.cram-ai-context',
+    CONTEXT_DIR, LEGACY_CONTEXT_DIR,
 }
 
 EXCLUDE_FILES = {
@@ -105,7 +106,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .cram-ai-context/
+          git add .ai-context/
           git diff --staged --quiet || git commit -m "chore: sync cram-ai context [skip ci]"
           git push
 """
@@ -159,11 +160,16 @@ CURRENT_TASK_TEMPLATE = """\
 
 def init_repo(target: str = '.', team: bool = False) -> None:
     root = os.path.abspath(target)
-    context_dir = os.path.join(root, '.cram-ai-context')
+    context_dir = canonical_context_dir(root)
 
     if os.path.exists(context_dir):
-        print(f".cram-ai-context/ already exists at {context_dir}. Skipping.")
+        print(f".ai-context/ already exists at {context_dir}. Skipping.")
         return
+    if os.path.isdir(legacy_context_dir(root)):
+        print(
+            f"Legacy {LEGACY_CONTEXT_DIR}/ exists; creating canonical {CONTEXT_DIR}/. "
+            "Move any manual entries across when you are ready."
+        )
 
     print(f"Scanning {root} ...")
     structure = scan_structure(root)
@@ -174,7 +180,7 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     os.makedirs(context_dir, exist_ok=True)
 
     with open(os.path.join(context_dir, 'ARCHITECTURE.md'), 'w') as f:
-        f.write(architecture)
+        f.write(architecture + "\n## Agent Rules\n" + _byte_cap_block())
 
     print("Building symbol index ...")
     _, sym_count = write_symbols_md(root)
@@ -200,20 +206,20 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     write_to_target(root, 'claude', '')
     print(f"  CLAUDE.md  (MCP config pointer)")
 
-    print(f"\nDone. Created .cram-ai-context/ with:")
+    print(f"\nDone. Created .ai-context/ with:")
     for fname in ['ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'CURRENT_TASK.md', 'SYMBOLS.md', '.gitignore']:
-        print(f"  .cram-ai-context/{fname}")
+        print(f"  .ai-context/{fname}")
 
     if team:
         print("\nCreating CI workflow:")
         write_ci_action(root)
 
     print("\nNext steps:")
-    print("  1. Review .cram-ai-context/ARCHITECTURE.md (edit if the summary is off)")
-    print("  2. Edit .cram-ai-context/DECISIONS.md — add your team's invariants")
-    print("  3. Edit .cram-ai-context/GOTCHAS.md — add non-obvious traps (add more over time)")
+    print("  1. Review .ai-context/ARCHITECTURE.md (edit if the summary is off)")
+    print("  2. Edit .ai-context/DECISIONS.md — add your team's invariants")
+    print("  3. Edit .ai-context/GOTCHAS.md — add non-obvious traps (add more over time)")
     print(f"  4. Commit context so teammates get it automatically:")
-    print(f"       git add .cram-ai-context/ .claude/ CLAUDE.md && git commit -m \"chore: init cram-ai\"")
+    print(f"       git add .ai-context/ .claude/ CLAUDE.md && git commit -m \"chore: init cram-ai\"")
     print("  5. Run `cram task \"your task\"` to set the active task — context auto-loads next session")
     if not team:
         print("\nTip: run `cram init --team` to also generate a GitHub Actions workflow")

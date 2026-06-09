@@ -12,13 +12,12 @@ from cram.utils import (
     get_model_recommendations,
     find_git_root as _find_git_root,
 )
+from cram.context_dir import CONTEXT_DIR, context_path, has_context_dir
 from cram import targets as _targets
 
 MAX_FILES         = int(os.environ.get('AICONTEXT_MAX_FILES',        '5'))
 MAX_EXCERPT_LINES = int(os.environ.get('AICONTEXT_MAX_EXCERPT_LINES', '80'))
 MAX_LINES         = MAX_EXCERPT_LINES  # alias kept for test compatibility
-
-CONTEXT_DIR = '.cram-ai-context'
 
 _STOP_WORDS = frozenset({
     'the', 'a', 'an', 'in', 'for', 'of', 'and', 'or', 'is', 'it', 'to',
@@ -32,7 +31,7 @@ _STOP_WORDS = frozenset({
 
 
 def _read_context_file(filename: str) -> str:
-    path = os.path.join(CONTEXT_DIR, filename)
+    path = context_path('.', filename, warn=True)
     if not os.path.exists(path):
         return ''
     with open(path) as f:
@@ -50,14 +49,33 @@ def _read_truncated(path: str) -> str:
 
 
 def _resolve_path(raw: str, root: str = '.') -> str:
-    if os.path.exists(raw):
-        return raw
+    real_root = os.path.realpath(os.path.abspath(root))
+
+    def _within_root(p: str) -> bool:
+        rp = os.path.realpath(p)
+        return rp == real_root or rp.startswith(real_root + os.sep)
+
+    # Absolute paths must resolve inside the repo root
+    if os.path.isabs(raw):
+        if not _within_root(raw):
+            return raw  # rejected — will fail os.path.exists() check downstream
+        return os.path.relpath(os.path.realpath(raw), root)
+
+    # Relative path: try resolving directly within root first
+    candidate = os.path.join(root, raw)
+    if os.path.exists(candidate) and _within_root(candidate):
+        return os.path.relpath(os.path.realpath(candidate), root)
+
+    # Walk to find by basename, verifying each match stays within root
     _skip = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'dist', 'build'}
     basename = os.path.basename(raw)
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _skip and not d.startswith('.')]
-        if basename in filenames:
-            return os.path.relpath(os.path.join(dirpath, basename), root)
+    if basename:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _skip and not d.startswith('.')]
+            if basename in filenames:
+                found = os.path.join(dirpath, basename)
+                if _within_root(found):
+                    return os.path.relpath(os.path.realpath(found), root)
     return raw
 
 
@@ -180,6 +198,7 @@ def _parse_file_line(raw: str) -> tuple[str, list[str]]:
 
 def find_relevant_files(
     task: str, arch: str, decisions: str = '', symbols: str = '', gotchas: str = '',
+    root: str = '.',
 ) -> list[tuple[str, list[str]]]:
     """Ask the context model to identify relevant files + their key identifiers.
 
@@ -229,7 +248,7 @@ def find_relevant_files(
         path, ids = _parse_file_line(raw)
         if not path:
             continue
-        resolved = _resolve_path(path)
+        resolved = _resolve_path(path, root)
         results.append((resolved, ids))
         if len(results) >= MAX_FILES:
             break
@@ -255,8 +274,9 @@ def populate_current_task(
     file_entries,  # list[str] or list[tuple[str, list[str]]]
     ctx_model: str = '',
     coding_model: str = '',
+    output_path: str | None = None,
 ) -> list[str]:
-    """Write CURRENT_TASK.md with identifier-focused excerpts. Returns files inlined."""
+    """Write CURRENT_TASK.md (or output_path) with identifier-focused excerpts. Returns files inlined."""
     # Normalize: accept both plain string paths and (path, identifiers) tuples
     normalized = [
         (e, []) if isinstance(e, str) else e
@@ -265,7 +285,10 @@ def populate_current_task(
     found   = [(f, ids) for f, ids in normalized if os.path.exists(f)]
     missing = [f for f, _ in normalized if not os.path.exists(f)]
 
-    with open(os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md'), 'w') as out:
+    target_path = output_path or context_path('.', 'CURRENT_TASK.md', warn=True)
+    if output_path:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    with open(target_path, 'w') as out:
         out.write(f"# Current Task\n\n## Task\n{task}\n\n")
 
         # Contract fields — Scope auto-derived, Out of Scope / DoD left for user
@@ -308,8 +331,8 @@ def populate_current_task(
 # ── main entry ────────────────────────────────────────────────────
 
 
-def find_context(task: str, target: str | None = None, inject: bool = False) -> None:
-    if not os.path.isdir(CONTEXT_DIR):
+def find_context(task: str, target: str | None = None, inject: bool = False, root: str = '.') -> None:
+    if not has_context_dir('.'):
         print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
 
@@ -350,7 +373,7 @@ def find_context(task: str, target: str | None = None, inject: bool = False) -> 
     print(f"[2/4] Identifying relevant files via {ctx_model} ...")
     sys.stdout.flush()
 
-    file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas)
+    file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas, root=root)
     found_entries = [(f, ids) for f, ids in file_entries if os.path.exists(f)]
     missing       = [f for f, _ in file_entries if not os.path.exists(f)]
 
@@ -385,7 +408,7 @@ def find_context(task: str, target: str | None = None, inject: bool = False) -> 
 
     inlined = populate_current_task(task, file_entries, ctx_model, coding_model)
 
-    task_path = os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md')
+    task_path = context_path('.', 'CURRENT_TASK.md', warn=True)
     with open(task_path) as f:
         tokens = len(f.read()) // 4
 
@@ -455,7 +478,7 @@ def main() -> None:
         help=(
             'Auto-load context into the tool\'s instruction file. '
             f"Choices: {', '.join(_targets.TARGET_FILES)} | all. "
-            'Falls back to default_target in .cram-ai-context/config.toml.'
+            'Falls back to default_target in .ai-context/config.toml.'
         ),
     )
     parser.add_argument(
@@ -469,7 +492,7 @@ def main() -> None:
     start = os.path.abspath(args.path) if args.path else os.getcwd()
     root  = _find_git_root(start)
 
-    if not os.path.isdir(os.path.join(root, CONTEXT_DIR)):
+    if not has_context_dir(root):
         print(
             f"Error: {CONTEXT_DIR}/ not found in {root}.\n"
             "  Run `cram init` first, or use --path to point at your repo:\n"
@@ -481,7 +504,7 @@ def main() -> None:
     os.chdir(root)
     task = ' '.join(args.task)
     effective_target = args.target or _targets.load_default_target(root)
-    find_context(task, effective_target, inject=args.inject)
+    find_context(task, effective_target, inject=args.inject, root=root)
 
 
 if __name__ == '__main__':

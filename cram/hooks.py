@@ -75,7 +75,7 @@ def uninstall_global_claude_md() -> None:
 
 HOOK_SCRIPT = """\
 #!/bin/sh
-# Installed by cram-ai — keeps .cram-ai-context/ARCHITECTURE.md fresh
+# Installed by cram-ai — keeps .ai-context/ARCHITECTURE.md fresh
 if command -v cram >/dev/null 2>&1; then
     cram sync
 elif command -v python3 >/dev/null 2>&1; then
@@ -96,6 +96,21 @@ if [ "$is_branch_checkout" = "1" ] && [ "$prev_head" != "$new_head" ]; then
         -H "Content-Type: application/json" \\
         --data-raw "{\"branch\": \"${new_branch}\"}" > /dev/null 2>&1 || true
 fi
+"""
+
+
+COMMIT_MSG_HOOK_SCRIPT = """\
+#!/bin/sh
+# Installed by cram-ai — prompts to record architectural decisions
+MSG_FILE="$1"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+  exit 0
+fi
+MSG=$(cat "$MSG_FILE")
+if echo "$MSG" | grep -qiE '(chose|instead of|decided|rationale|trade.?off|switched? (from|to)|moved? (from|to|away))'; then
+  printf "\\ncram: decision language detected — consider recording it:\\n  cram decide \\\"...\\\"\\n\\n"
+fi
+exit 0
 """
 
 
@@ -124,8 +139,8 @@ def _write_hook(hook_path: str, script: str, marker: str) -> bool:
     return True
 
 
-def install_hook(repo_root: str = '.') -> bool:
-    """Write post-commit hook. Returns True if installed, False if skipped."""
+def install_commit_msg_hook(repo_root: str = '.') -> bool:
+    """Write commit-msg hook that suggests cram decide for decision language. Returns True if installed."""
     root = os.path.abspath(repo_root)
     git_dir = _git_dir(root)
     if not git_dir:
@@ -133,7 +148,21 @@ def install_hook(repo_root: str = '.') -> bool:
         return False
     hooks_dir = os.path.join(git_dir, 'hooks')
     os.makedirs(hooks_dir, exist_ok=True)
-    return _write_hook(os.path.join(hooks_dir, 'post-commit'), HOOK_SCRIPT, 'cram-ai')
+    return _write_hook(os.path.join(hooks_dir, 'commit-msg'), COMMIT_MSG_HOOK_SCRIPT, 'cram-ai')
+
+
+def install_hook(repo_root: str = '.') -> bool:
+    """Write post-commit and commit-msg hooks. Returns True if any installed."""
+    root = os.path.abspath(repo_root)
+    git_dir = _git_dir(root)
+    if not git_dir:
+        print(f"No .git/ directory found in {root}. Skipping hook install.")
+        return False
+    hooks_dir = os.path.join(git_dir, 'hooks')
+    os.makedirs(hooks_dir, exist_ok=True)
+    a = _write_hook(os.path.join(hooks_dir, 'post-commit'), HOOK_SCRIPT, 'cram-ai')
+    b = _write_hook(os.path.join(hooks_dir, 'commit-msg'), COMMIT_MSG_HOOK_SCRIPT, 'cram-ai')
+    return a or b
 
 
 def install_checkout_hook(repo_root: str = '.') -> bool:
@@ -157,8 +186,13 @@ from pathlib import Path
 
 
 def main():
-    task_file = Path.cwd() / \'.cram-ai-context\' / \'CURRENT_TASK.md\'
-    if not task_file.exists():
+    task_file = None
+    for dirname in (\'.ai-context\', \'.cram-ai-context\'):
+        candidate = Path.cwd() / dirname / \'CURRENT_TASK.md\'
+        if candidate.exists():
+            task_file = candidate
+            break
+    if task_file is None:
         sys.exit(0)
 
     try:

@@ -1,4 +1,4 @@
-"""cram status — show .cram-ai-context/ file freshness and repo sync state."""
+"""cram status — show .ai-context/ file freshness and repo sync state."""
 
 from __future__ import annotations
 import os
@@ -6,7 +6,14 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import (
+    CONTEXT_DIR,
+    LEGACY_CONTEXT_DIR,
+    context_basename,
+    has_context_dir,
+    resolve_context_dir,
+)
+
 CONTEXT_FILES = ['ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'CURRENT_TASK.md', '.gitignore']
 
 # Commits-since-update that maps to score 10 (critical). Override via env.
@@ -20,10 +27,11 @@ def _mtime(path: str) -> datetime | None:
         return None
 
 
-def _last_commit_time() -> datetime | None:
+def _last_commit_time(root: str = '.') -> datetime | None:
     try:
         ts = subprocess.check_output(
             ['git', 'log', '-1', '--format=%ct'],
+            cwd=root,
             stderr=subprocess.DEVNULL,
         ).decode().strip()
         return datetime.fromtimestamp(int(ts), tz=timezone.utc) if ts else None
@@ -53,7 +61,8 @@ def _line_count(path: str) -> int:
 
 def _commits_since_context_update(root: str) -> int | None:
     """Commits on HEAD since ARCHITECTURE.md was last committed. None if unknown."""
-    rel = os.path.join(CONTEXT_DIR, 'ARCHITECTURE.md')
+    rel_dir = CONTEXT_DIR if os.path.isdir(os.path.join(root, CONTEXT_DIR)) else LEGACY_CONTEXT_DIR
+    rel = os.path.join(rel_dir, 'ARCHITECTURE.md')
     try:
         sha = subprocess.check_output(
             ['git', 'log', '-1', '--format=%H', '--', rel],
@@ -92,12 +101,12 @@ def staleness_band(score: int) -> str:
 def get_status_dict(root: str = '.') -> dict:
     """Return structured status data for programmatic use (tray server, etc.)."""
     root = os.path.abspath(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root)
 
-    if not os.path.isdir(context_dir):
+    if not has_context_dir(root):
         return {'state': 'not-init', 'files': {}, 'last_commit_age': None}
 
-    last_commit = _last_commit_time()
+    last_commit = _last_commit_time(root)
     now = datetime.now(tz=timezone.utc)
     files: dict = {}
     arch_behind_commit = False
@@ -133,18 +142,18 @@ def get_status_dict(root: str = '.') -> dict:
 
 def show_status(root: str = '.') -> None:
     root = os.path.abspath(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root, warn=True)
 
-    if not os.path.isdir(context_dir):
-        print(f"No .cram-ai-context/ found in {root}.")
+    if not has_context_dir(root):
+        print(f"No .ai-context/ found in {root}.")
         print("Run `cram init` to set it up.")
         sys.exit(1)
 
     from cram.cost_model import budget_status as _budget_status
 
-    last_commit = _last_commit_time()
+    last_commit = _last_commit_time(root)
 
-    print(f".cram-ai-context/  ({context_dir})")
+    print(f"{context_basename(root)}/  ({context_dir})")
     print()
 
     for fname in CONTEXT_FILES:
@@ -190,6 +199,13 @@ def show_status(root: str = '.') -> None:
         if band in ('stale', 'critical'):
             msg += " Run `cram sync`."
     print(msg)
+
+    try:
+        from cram.targets import load_output_config
+        byte_cap = load_output_config(root)['byte_cap']
+    except Exception:
+        byte_cap = 6000
+    print(f"Output protection: active ({byte_cap:,} byte cap)   ✓")
 
 
 def main() -> None:

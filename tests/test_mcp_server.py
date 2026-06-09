@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 
-CONTEXT_DIR = '.cram-ai-context'
+CONTEXT_DIR = '.ai-context'
 
 
 @pytest.fixture()
@@ -218,3 +218,120 @@ class TestGetHealthDeterminism:
         assert 'trim before next sync' in result
         assert 'GOTCHAS.md' in result
         assert 'recommendation' in result
+
+
+# ---------------------------------------------------------------------------
+# Task slot namespacing
+# ---------------------------------------------------------------------------
+
+class TestTaskSlotNamespacing:
+    def test_different_tasks_write_different_slot_files(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries_a = [('main.py', ['main'])]
+        entries_b = [('main.py', ['helper'])]
+        with patch('cram.find_context.find_relevant_files', side_effect=[entries_a, entries_b]):
+            srv.get_context('add auth login')
+            srv.get_context('fix database query')
+
+        tasks_dir = repo / CONTEXT_DIR / 'tasks'
+        slot_files = list(tasks_dir.glob('*.md'))
+        assert len(slot_files) == 2
+
+    def test_same_task_reuses_same_slot(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            srv.get_context('fix the helper function')
+            srv.get_context('fix the helper function')
+
+        tasks_dir = repo / CONTEXT_DIR / 'tasks'
+        slot_files = list(tasks_dir.glob('*.md'))
+        assert len(slot_files) == 1
+
+    def test_slot_content_matches_returned_content(self, repo, monkeypatch):
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            result = srv.get_context('add new feature')
+
+        tasks_dir = repo / CONTEXT_DIR / 'tasks'
+        slot_file = next(tasks_dir.glob('*.md'))
+        assert slot_file.read_text() == result
+
+    def test_stale_slots_cleaned_on_generate(self, repo, monkeypatch):
+        import time, cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        # Pre-create a stale slot file
+        tasks_dir = repo / CONTEXT_DIR / 'tasks'
+        tasks_dir.mkdir(parents=True)
+        stale = tasks_dir / 'stale-task.md'
+        stale.write_text('old context')
+        # Back-date it by 25 hours
+        old_time = time.time() - 25 * 3600
+        os.utime(str(stale), (old_time, old_time))
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            srv.get_context('new task here')
+
+        assert not stale.exists()
+
+
+# ---------------------------------------------------------------------------
+# Usage log
+# ---------------------------------------------------------------------------
+
+class TestUsageLog:
+    def test_generate_appends_to_usage_jsonl(self, repo, monkeypatch):
+        import json as _json, cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            srv.get_context('add login feature')
+
+        log_path = repo / CONTEXT_DIR / 'usage.jsonl'
+        assert log_path.exists()
+        line = _json.loads(log_path.read_text().strip().splitlines()[-1])
+        assert line['source'] == 'generate'
+        assert line['task'] == 'add login feature'
+        assert line['tokens'] > 0
+        assert 'ts' in line
+
+    def test_reload_appends_to_usage_jsonl(self, repo, monkeypatch):
+        import json as _json, cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+
+        (repo / CONTEXT_DIR / 'CURRENT_TASK.md').write_text('# Task: reload test\n\nsome context\n')
+        srv.get_context()
+
+        log_path = repo / CONTEXT_DIR / 'usage.jsonl'
+        assert log_path.exists()
+        line = _json.loads(log_path.read_text().strip().splitlines()[-1])
+        assert line['source'] == 'reload'
+
+    def test_multiple_calls_append_multiple_lines(self, repo, monkeypatch):
+        import json as _json, cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            srv.get_context('task one')
+            srv.get_context('task two')
+
+        log_path = repo / CONTEXT_DIR / 'usage.jsonl'
+        lines = [l for l in log_path.read_text().strip().splitlines() if l]
+        assert len(lines) == 2

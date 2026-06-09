@@ -8,10 +8,14 @@ at runtime via POST /set-repo.
 from __future__ import annotations
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Per-process token — required on all mutating POST routes to prevent CSRF
+_SESSION_TOKEN: str = secrets.token_hex(16)
 
 def _find_cram() -> str:
     """Locate the cram CLI binary.
@@ -35,8 +39,8 @@ _CRAM = _find_cram()
 from flask import Flask, jsonify, request, send_from_directory
 
 from cram.status import get_status_dict
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, resolve_context_dir
 
-CONTEXT_DIR  = '.cram-ai-context'
 DEFAULT_PORT = 49155
 
 _UI_DIR = Path(__file__).parent / 'tray_ui'
@@ -87,7 +91,7 @@ def _save_recent_repo(path: str) -> None:
 # ── token helpers ─────────────────────────────────────────────────
 
 _EXCLUDE_SCAN = {
-    '.git', CONTEXT_DIR, 'node_modules', '__pycache__',
+    '.git', CONTEXT_DIR, LEGACY_CONTEXT_DIR, 'node_modules', '__pycache__',
     '.venv', 'venv', 'dist', 'build', '.next', 'coverage',
 }
 _SCAN_EXTS = {
@@ -134,7 +138,30 @@ def create_app(repo_path: str) -> Flask:
     def root() -> str:
         return _active_repo[0]
     def context_dir() -> str:
-        return os.path.join(root(), CONTEXT_DIR)
+        return resolve_context_dir(root())
+
+    # ── CSRF guard ────────────────────────────────────────────────
+
+    @app.get('/token')
+    def get_token():
+        """Return the per-process session token. Only reachable from localhost."""
+        return jsonify({'token': _SESSION_TOKEN})
+
+    @app.before_request
+    def _require_token_on_post():
+        if request.method != 'POST':
+            return None
+        # Validate Origin to block cross-site requests
+        origin = request.headers.get('Origin', '')
+        if origin and origin not in ('null', 'file://') and not origin.startswith(
+            ('http://localhost', 'http://127.0.0.1')
+        ):
+            return jsonify({'error': 'Forbidden'}), 403
+        # Validate session token
+        token = request.headers.get('X-Cram-Token', '')
+        if token != _SESSION_TOKEN:
+            return jsonify({'error': 'Forbidden'}), 403
+        return None
 
     # ── UI static files ───────────────────────────────────────────
 

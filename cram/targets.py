@@ -4,12 +4,12 @@ from __future__ import annotations
 import os
 import re
 
+from cram.context_dir import CONTEXT_DIR, resolve_context_dir
+
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib  # type: ignore[no-redef]
-
-CONTEXT_DIR = '.cram-ai-context'
 
 CRAM_SECTION_START = "<!-- cram-ai: start -->"
 CRAM_SECTION_END   = "<!-- cram-ai: end -->"
@@ -39,7 +39,7 @@ TARGET_FILES: dict[str, str] = {
     "cursor":   ".cursor/rules/cram-task.md",      # Cursor reads all files in .cursor/rules/
     "claude":   "CLAUDE.md",                        # Claude Code reads CLAUDE.md from the project root
     "copilot":  ".github/cram-task.md",             # Requires one-time include in copilot-instructions.md
-    "codex":    ".cram-ai-context/AGENTS.md",       # Codex reads AGENTS.md recursively in subdirs
+    "codex":    "AGENTS.md",                          # Codex reads AGENTS.md from the repo root
     "windsurf": ".windsurf/rules/cram-task.md",     # Windsurf reads all files in .windsurf/rules/
 }
 
@@ -53,9 +53,47 @@ TARGET_INDICATORS: dict[str, str] = {
 }
 
 
+def load_output_config(root: str) -> dict:
+    """Read [output] section from config.toml. Returns defaults if missing."""
+    defaults = {'byte_cap': 6000, 'line_cap': 50, 'temp_file': '.cram-temp-output.txt'}
+    config_path = os.path.join(resolve_context_dir(root), 'config.toml')
+    if not os.path.exists(config_path):
+        return defaults
+    try:
+        with open(config_path, 'rb') as f:
+            cfg = tomllib.load(f)
+        out = cfg.get('output', {})
+        return {
+            'byte_cap':  int(out.get('byte_cap',  defaults['byte_cap'])),
+            'line_cap':  int(out.get('line_cap',   defaults['line_cap'])),
+            'temp_file': str(out.get('temp_file',  defaults['temp_file'])),
+        }
+    except Exception:
+        return defaults
+
+
+def _byte_cap_block(byte_cap: int = 6000, line_cap: int = 50,
+                    temp_file: str = '.cram-temp-output.txt') -> str:
+    return (
+        "\n## Command Output Protection\n\n"
+        "Every command with unknown or potentially large output MUST be byte-capped.\n\n"
+        f"Default rule: COMMAND 2>&1 | head -c {byte_cap}\n\n"
+        "Safe patterns:\n"
+        f"  head -n {line_cap} file.py | cat\n"
+        "  git status --porcelain | head -n 30\n"
+        "  git log --oneline -15\n"
+        "  grep -n \"KEYWORD\" file.py | head -n 40\n\n"
+        "Write-then-inspect for large outputs:\n"
+        f"  COMMAND > {temp_file} 2>&1\n"
+        f"  head -c {byte_cap} {temp_file}\n\n"
+        "Never cat a file over 200 lines without head/tail.\n"
+        f"Never run a script with unknown output without | head -c {byte_cap}.\n"
+    )
+
+
 def load_default_target(root: str) -> str | None:
-    """Read default_target from .cram-ai-context/config.toml, if present."""
-    config_path = os.path.join(root, CONTEXT_DIR, 'config.toml')
+    """Read default_target from .ai-context/config.toml, if present."""
+    config_path = os.path.join(resolve_context_dir(root), 'config.toml')
     if not os.path.exists(config_path):
         return None
     try:
@@ -68,7 +106,7 @@ def load_default_target(root: str) -> str | None:
 
 
 def save_default_target(root: str, target: str) -> None:
-    """Persist default_target to .cram-ai-context/config.toml.
+    """Persist default_target to .ai-context/config.toml.
 
     Silently no-ops if target is invalid or the file cannot be written.
     Preserves all other content already in config.toml.
@@ -76,7 +114,7 @@ def save_default_target(root: str, target: str) -> None:
     import re
     if target not in {*TARGET_FILES, 'all'}:
         return
-    config_path = os.path.join(root, CONTEXT_DIR, 'config.toml')
+    config_path = os.path.join(resolve_context_dir(root), 'config.toml')
     content = ''
     if os.path.exists(config_path):
         try:
@@ -132,16 +170,23 @@ def _arch_header(arch_content: str, max_lines: int = 25) -> str:
            '\n'.join(lines) + '\n\n---\n\n'
 
 
-def _render(target: str, task_content: str, arch_content: str) -> str:
+def _render(target: str, task_content: str, arch_content: str,
+            output_cfg: dict | None = None) -> str:
     """Return the content to write for this target.
 
     For claude, content goes inside a cram-managed marker section in root CLAUDE.md
     so any existing user content is preserved. Other tools only see the single
-    injected file, so we prepend a compact architecture header for repo orientation.
+    injected file, so we prepend a compact architecture header and append byte-cap rules.
     """
+    cfg = output_cfg or {}
+    cap_block = _byte_cap_block(
+        byte_cap=cfg.get('byte_cap', 6000),
+        line_cap=cfg.get('line_cap', 50),
+        temp_file=cfg.get('temp_file', '.cram-temp-output.txt'),
+    )
     if target == 'claude':
-        return task_content
-    return _arch_header(arch_content) + task_content
+        return task_content + cap_block
+    return _arch_header(arch_content) + task_content + cap_block
 
 
 def _upsert_cram_section(path: str, inner_content: str) -> None:
@@ -184,16 +229,18 @@ def write_to_target(root: str, target: str, task_content: str, arch_content: str
     path = os.path.join(root, rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
+    output_cfg = load_output_config(root)
     if target == 'claude' and not inject:
         pointer = CLAUDE_MCP_POINTER.replace('/absolute/path/to/this/repo', root)
         _upsert_cram_section(path, pointer)
+    elif target in ('claude', 'codex'):
+        # Shared user files — use markers to preserve content outside the cram block
+        content = _render(target, task_content, arch_content, output_cfg)
+        _upsert_cram_section(path, content)
     else:
-        content = _render(target, task_content, arch_content)
-        if target == 'claude':
-            _upsert_cram_section(path, content)
-        else:
-            with open(path, 'w') as f:
-                f.write(content)
+        content = _render(target, task_content, arch_content, output_cfg)
+        with open(path, 'w') as f:
+            f.write(content)
     return path
 
 

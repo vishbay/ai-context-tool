@@ -40,11 +40,11 @@ cram init
 #   → installs a git post-commit hook to keep context fresh
 
 # 2. Fill in the manual files — this is where cram's real value lives
-vim .cram-ai-context/DECISIONS.md   # architectural invariants, naming conventions
-vim .cram-ai-context/GOTCHAS.md     # non-obvious traps that burned your team
+vim .ai-context/DECISIONS.md   # architectural invariants, naming conventions
+vim .ai-context/GOTCHAS.md     # non-obvious traps that burned your team
 
 # 3. Commit so teammates get the context layer too
-git add .cram-ai-context/ CLAUDE.md
+git add .ai-context/ CLAUDE.md
 git commit -m "chore: init cram-ai context layer"
 ```
 
@@ -54,12 +54,12 @@ Then wire up your tool of choice — [MCP](#mcp-delivery) or [file-based deliver
 
 ## The context layer
 
-cram maintains five files in `.cram-ai-context/`. Two are auto-generated. Two are manual. One is
+cram maintains five files in `.ai-context/`. Two are auto-generated. Two are manual. One is
 generated per task.
 
 ```
 your-repo/
-└── .cram-ai-context/
+└── .ai-context/
     ├── ARCHITECTURE.md   ← auto  · repo structure, tech stack, key files
     ├── SYMBOLS.md        ← auto  · every source file mapped to its public identifiers
     ├── DECISIONS.md      ← manual · architectural commitments your team has made
@@ -79,6 +79,17 @@ your-repo/
 - `DECISIONS.md`: "we use X", "never do Y", naming conventions, non-obvious invariants
 - `GOTCHAS.md`: silent side effects, middleware gaps, surprising nulls — things grep can't tell you
 - Append entries with `cram decide "..."` or `cram gotcha "..."`
+
+**Output protection by default:**
+Every file cram generates for file-based targets includes command output protection rules.
+Your agent won't accidentally read 80 KB of build output mid-session:
+
+- Unknown commands are byte-capped to 6,000 bytes by default (`COMMAND 2>&1 | head -c 6000`)
+- File inspection uses `head`/`tail`, never raw `cat`
+- Large outputs go to a temp file you inspect in ranges
+- Configurable in `.ai-context/config.toml` under `[output]` (`byte_cap`, `line_cap`, `temp_file`)
+
+---
 
 **Per-task** (`CURRENT_TASK.md`):
 When you call `get_context("task description")`, cram runs a four-stage pipeline:
@@ -161,7 +172,7 @@ cram task "add pagination to the users endpoint" --target all
 | `cursor` | `.cursor/rules/cram-task.md` |
 | `windsurf` | `.windsurf/rules/cram-task.md` |
 | `copilot` | `.github/cram-task.md` |
-| `codex` | `.cram-ai-context/AGENTS.md` |
+| `codex` | `AGENTS.md` (repo root — where Codex reads it) |
 | `claude` | `CLAUDE.md` (escape hatch for Claude Code; prefer MCP) |
 | `all` | All of the above |
 
@@ -241,7 +252,7 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 | `cram decide "..." [path]` | Append a dated architectural decision to DECISIONS.md |
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
-| `cram status [path]` | Show each context file with age, line count, and token budget status. Prints a health line: `Context health : stale (6/10) — 6 commits since last sync. Run 'cram sync'.` |
+| `cram status [path]` | Show each context file with age, line count, and token budget status. Prints health line + `Output protection: active (6,000 byte cap) ✓` |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
 | `cram hook install\|uninstall` | Manage the git post-commit hook manually |
