@@ -8,7 +8,6 @@ import sys
 from cram.utils import (
     call_model,
     call_context_model,
-    cache_min_tokens,
     get_model_recommendations,
     find_git_root as _find_git_root,
 )
@@ -411,14 +410,6 @@ def find_context(task: str, target: str | None = None, inject: bool = False, roo
     task_path = context_path('.', 'CURRENT_TASK.md', warn=True)
     with open(task_path) as f:
         tokens = len(f.read()) // 4
-
-    min_tokens = cache_min_tokens(coding_model)
-    if tokens < min_tokens:
-        print(
-            f"  Warning: ~{tokens:,} tokens is below the {min_tokens:,}-token cache minimum "
-            f"for {coding_model}.\n"
-            f"  Increase AICONTEXT_MAX_LINES or AICONTEXT_MAX_EXCERPT_LINES to pad context."
-        )
 
     if target and (target != 'claude' or inject):
         arch_content = _read_context_file('ARCHITECTURE.md')

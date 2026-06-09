@@ -44,6 +44,36 @@ def _task_slug(task: str) -> str:
     return slug or 'unnamed'
 
 
+def _archive_current_task() -> None:
+    """Append the current CURRENT_TASK.md to TASK_HISTORY.jsonl before it's replaced."""
+    try:
+        current_path = _ctx_path('CURRENT_TASK.md')
+        if not os.path.exists(current_path):
+            return
+        content = open(current_path, errors='ignore').read().strip()
+        if not content or content.startswith('<!-- Session ended'):
+            return
+        # Extract task description
+        task = ''
+        for line in content.splitlines():
+            s = line.strip()
+            if s.startswith('# Task:'):
+                task = s[len('# Task:'):].strip()
+                break
+        if not task:
+            return
+        entry = {
+            'ts':   datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'task': task,
+            'slug': _task_slug(task),
+        }
+        history_path = _ctx_path('TASK_HISTORY.jsonl')
+        with open(history_path, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception:
+        pass
+
+
 def _cleanup_stale_slots(tasks_dir: str, max_age: int = 86400) -> None:
     try:
         cutoff = time.time() - max_age
@@ -173,6 +203,7 @@ def get_context(task: str = '') -> str:
                 )
 
             os.makedirs(tasks_dir, exist_ok=True)
+            _archive_current_task()
             populate_current_task(task, file_entries, ctx_model, coding_model,
                                   output_path=slot_path)
             _cleanup_stale_slots(tasks_dir)
@@ -412,6 +443,37 @@ def run_benchmark() -> str:
         return buf.getvalue()
     except SystemExit:
         return buf.getvalue() or 'Benchmark failed — run `cram init` first.'
+
+
+@mcp.tool()
+def get_task_history(limit: int = 20) -> str:
+    """Return recent task history as a markdown list (newest first).
+
+    Args:
+        limit: Maximum number of entries to return (default 20).
+    """
+    if not _repo_root:
+        return 'Error: repo root not configured.'
+    history_path = _ctx_path('TASK_HISTORY.jsonl')
+    if not os.path.exists(history_path):
+        return 'No task history yet.'
+    try:
+        entries = []
+        with open(history_path, errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+        if not entries:
+            return 'No task history yet.'
+        entries = entries[-limit:][::-1]
+        lines = ['## Task History\n']
+        for e in entries:
+            ts = e.get('ts', '')[:16].replace('T', ' ')
+            lines.append(f'- `{ts}` — {e.get("task", "")}')
+        return '\n'.join(lines)
+    except Exception as ex:
+        return f'Error reading task history: {ex}'
 
 
 def main() -> None:

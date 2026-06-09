@@ -60,11 +60,11 @@ def test_import_works():
 class TestBudgetStatus:
     def test_over_budget(self):
         from cram.cost_model import budget_status
-        assert budget_status('GOTCHAS.md', 401) == 'over'
+        assert budget_status('GOTCHAS.md', 801) == 'over'
 
     def test_near_budget(self):
         from cram.cost_model import budget_status
-        assert budget_status('GOTCHAS.md', 360) == 'near'  # 360 >= 0.8 * 400
+        assert budget_status('GOTCHAS.md', 640) == 'near'  # 640 >= 0.8 * 800
 
     def test_ok_budget(self):
         from cram.cost_model import budget_status

@@ -193,7 +193,7 @@ def run_benchmark(root: str) -> None:
 
     # ── Cache-minimum check (frozen layer must be cacheable) ──────
     print("  Cacheable-prefix check  (frozen layer must clear the minimum)")
-    for model, _ in _MODELS.items():
+    for model, _ in MODEL_BASE.items():
         floor = _CACHE_MIN[model]
         ok    = frozen_tok >= floor
         mark  = '✓' if ok else '✗'

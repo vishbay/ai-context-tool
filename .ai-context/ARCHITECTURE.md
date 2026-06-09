@@ -21,13 +21,14 @@ Core Python package containing main functionality:
 - `decisions.py` - Mine architectural decisions from git history; show DECISIONS.md
 - `decide.py` - Decision recording and management; append to DECISIONS.md
 - `gotcha.py` - Non-obvious trap documentation; append to GOTCHAS.md
-- `ui.py` - Textual TUI dashboard for decisions, session efficiency, and context health
+- `ui.py` - Textual TUI dashboard for decisions, sessions, health, and command execution
 - `utils.py` - Shared utility functions for context operations
 - `__init__.py` - Package initialization
 
 ### `.claude/`
 Claude-specific configuration and settings:
 - `settings.local.json` - Local settings for Claude integration and behavior
+- `hooks/` - SessionStart hook for auto-injecting context
 
 ### `templates/`
 Template files for project initialization:
@@ -68,7 +69,7 @@ Test suite for the package functionality
 - **Architectural decision tracking**: Record and mine decisions from git history; auto-suggest via commit-msg hook
 - **Gotcha documentation**: Maintain repository-specific non-obvious traps and workarounds
 - **Orientation tax audit**: Measure reads-vs-edits efficiency from transcripts
-- **TUI dashboard**: Visualize decisions, session metrics, and context health
+- **Interactive TUI dashboard**: Visualize decisions, approve/delete pending changes, execute cram commands (sync, task, benchmark, doctor) with live output
 - Usage logging (task, tokens, timestamp) in JSONL format
 - Suggested decisions (from agents) logged to suggestions.jsonl
 - Custom targets via config.toml with marker-based upsert support
@@ -80,7 +81,7 @@ CLI commands dispatched through unified `cram` entry point:
 - `cram task "<description>"` - Populate CURRENT_TASK.md before coding session with relevant file excerpts
 - `cram sync [path]` - Update ARCHITECTURE.md and SYMBOLS.md after a commit
 - `cram status [path]` - Show .ai-context/ freshness and output protection status
-- `cram decide "<statement>"` - Append architectural decision to DECISIONS.md (auto-suggested by commit-msg hook)
+- `cram decide "<statement>"` - Append architectural decision to DECISIONS.md
 - `cram decisions [--mine] [--days N]` - Show or mine decisions from git history
 - `cram gotcha "<trap>"` - Append non-obvious trap to GOTCHAS.md
 - `cram audit [--days N] [--all]` - Measure orientation tax from Claude Code transcripts

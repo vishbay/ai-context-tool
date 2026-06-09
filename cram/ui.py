@@ -4,6 +4,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 
@@ -37,7 +38,6 @@ _REASON_RE = re.compile(r'\*\*Reason:\*\*\s*(.+)')
 def _parse_decisions(content: str) -> list[dict]:
     """Return list of decision dicts parsed from DECISIONS.md."""
     entries = []
-    # Split on entry headings
     splits = list(_ENTRY_RE.finditer(content))
     for i, m in enumerate(splits):
         end = splits[i + 1].start() if i + 1 < len(splits) else len(content)
@@ -65,19 +65,11 @@ def _parse_decisions(content: str) -> list[dict]:
 
 def _approve_decision(content: str, decision_id: str) -> str:
     """Remove [PENDING] tag and set Status to Accepted in DECISIONS.md content."""
-    # Remove [PENDING] from heading
     content = re.sub(
         rf'(## \[{re.escape(decision_id)}\]) \[PENDING\] ',
         r'\1 ',
         content,
     )
-    # Replace Status line in that entry's block
-    def replace_status(m: re.Match) -> str:
-        return f'## [{decision_id}]' + m.group(1).replace(
-            'Pending — proposed by agent, awaiting owner review', 'Accepted'
-        ).replace('Pending', 'Accepted')
-
-    # Targeted replace: find the entry block and update its Status line
     entry_start = content.find(f'## [{decision_id}]')
     if entry_start == -1:
         return content
@@ -95,7 +87,6 @@ def _delete_decision(content: str, decision_id: str) -> str:
         return content
     next_entry = content.find('\n## [', start + 1)
     block_end  = next_entry if next_entry != -1 else len(content)
-    # Remove trailing blank lines before next entry
     return content[:start].rstrip('\n') + '\n' + content[block_end:]
 
 
@@ -104,18 +95,68 @@ def _delete_decision(content: str, decision_id: str) -> str:
 def _build_app(root: str):  # noqa: ANN202
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.containers import ScrollableContainer, VerticalScroll
+    from textual.containers import ScrollableContainer, Vertical, VerticalScroll
+    from textual.screen import ModalScreen
     from textual.widgets import (
-        DataTable, Footer, Header, Label, Static,
+        Button, DataTable, Footer, Header, Input, Label,
+        ListItem, ListView, RichLog, Static,
         TabbedContent, TabPane,
     )
     from textual.reactive import reactive
+    from textual import work
+    from textual.worker import WorkerState
 
     from cram.context_dir import context_path
     from cram.audit import _analyze_transcript, _project_transcript_dir
     from cram.health import context_health
 
     DECISIONS_FILE = 'DECISIONS.md'
+
+    # ── Task input modal ─────────────────────────────────────────
+
+    class TaskInputModal(ModalScreen):
+        CSS = """
+        TaskInputModal {
+            align: center middle;
+        }
+        #modal-dialog {
+            background: $surface;
+            border: thick $accent;
+            padding: 1 2;
+            width: 64;
+            height: auto;
+        }
+        #modal-dialog Label {
+            margin-bottom: 1;
+        }
+        #modal-input {
+            margin-bottom: 1;
+        }
+        """
+        BINDINGS = [Binding('escape', 'cancel', 'Cancel')]
+
+        def compose(self) -> ComposeResult:
+            with Vertical(id='modal-dialog'):
+                yield Label('[b]cram task[/b] — enter task description')
+                yield Input(placeholder='e.g. fix the auth middleware', id='modal-input')
+                yield Button('Run', variant='primary', id='modal-confirm')
+
+        def on_mount(self) -> None:
+            self.query_one('#modal-input', Input).focus()
+
+        def on_input_submitted(self) -> None:
+            self._submit()
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == 'modal-confirm':
+                self._submit()
+
+        def _submit(self) -> None:
+            value = self.query_one('#modal-input', Input).value.strip()
+            self.dismiss(value or None)
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
 
     # ── Decisions pane ───────────────────────────────────────────
 
@@ -135,7 +176,7 @@ def _build_app(root: str):  # noqa: ANN202
 
         def compose(self) -> ComposeResult:
             yield Label('[b]Pending review[/b]', id='pending-header')
-            yield Static('', id='pending-list')
+            yield ListView(id='pending-list')
             yield Label('[b]Accepted[/b]', id='accepted-header')
             yield Static('', id='accepted-list')
 
@@ -147,30 +188,31 @@ def _build_app(root: str):  # noqa: ANN202
             pending  = [e for e in entries if e['pending']]
             accepted = [e for e in entries if not e['pending']]
 
-            pending_text = ''
-            for e in pending:
-                pending_text += (
-                    f"  [{e['id']}] [yellow]{e['title']}[/yellow]\n"
-                    f"  {'Reason: ' + e['reason'] if e['reason'] else ''}\n"
-                    f"  [dim]{e['date']}[/dim]\n\n"
-                )
-            if not pending_text:
-                pending_text = '  [dim]No pending decisions.[/dim]\n'
+            lv = self.query_one('#pending-list', ListView)
+            lv.clear()
+            if pending:
+                for e in pending:
+                    label = f"[yellow]{e['id']}[/yellow]  {e['title']}"
+                    if e['reason']:
+                        label += f"\n  [dim]{e['reason']}[/dim]"
+                    lv.append(ListItem(Label(label), id=f'pending-{e["id"]}'))
+                self.focused_id = pending[0]['id']
+            else:
+                lv.append(ListItem(Label('[dim]No pending decisions.[/dim]')))
+                self.focused_id = None
 
             accepted_text = ''
             for e in accepted:
-                accepted_text += (
-                    f"  [{e['id']}] {e['title']}"
-                    f"{'  [dim]' + e['date'] + '[/dim]' if e['date'] else ''}\n"
-                )
-            if not accepted_text:
-                accepted_text = '  [dim]None yet.[/dim]\n'
+                date = f'  [dim]{e["date"]}[/dim]' if e['date'] else ''
+                accepted_text += f'  {e["id"]}  {e["title"]}{date}\n'
+            self.query_one('#accepted-list', Static).update(
+                accepted_text or '  [dim]None yet.[/dim]\n'
+            )
 
-            self.query_one('#pending-list', Static).update(pending_text)
-            self.query_one('#accepted-list', Static).update(accepted_text)
-
-            # Track first pending for keybinding target
-            self.focused_id = pending[0]['id'] if pending else None
+        def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+            if event.item is not None and event.item.id:
+                # id is "pending-DECISION-NNN"
+                self.focused_id = event.item.id[len('pending-'):]
 
         def approve_focused(self) -> str | None:
             path = self._decisions_path()
@@ -178,9 +220,8 @@ def _build_app(root: str):  # noqa: ANN202
                 return None
             with open(path) as f:
                 content = f.read()
-            new_content = _approve_decision(content, self.focused_id)
             with open(path, 'w') as f:
-                f.write(new_content)
+                f.write(_approve_decision(content, self.focused_id))
             approved_id = self.focused_id
             self.refresh_decisions()
             return approved_id
@@ -191,9 +232,8 @@ def _build_app(root: str):  # noqa: ANN202
                 return None
             with open(path) as f:
                 content = f.read()
-            new_content = _delete_decision(content, self.focused_id)
             with open(path, 'w') as f:
-                f.write(new_content)
+                f.write(_delete_decision(content, self.focused_id))
             deleted_id = self.focused_id
             self.refresh_decisions()
             return deleted_id
@@ -206,11 +246,17 @@ def _build_app(root: str):  # noqa: ANN202
 
     class SessionsPane(ScrollableContainer):
         def compose(self) -> ComposeResult:
+            yield Static('', id='sessions-legend')
             yield DataTable(id='sessions-table')
 
         def on_mount(self) -> None:
             table = self.query_one('#sessions-table', DataTable)
-            table.add_columns('Date', 'Reads', 'Edits', 'Ratio', 'Signal')
+            table.add_columns('Date', 'File reads', 'File writes', 'Explore ratio', 'Cache read tok', 'Efficiency')
+            self.query_one('#sessions-legend', Static).update(
+                '[dim]Explore ratio = reads before first write ÷ writes.  '
+                'Low (< 2×) = good context, agent knew where to look.  '
+                'High (> 5×) = agent explored a lot before writing.[/dim]\n'
+            )
             self.refresh_sessions()
 
         def refresh_sessions(self) -> None:
@@ -220,12 +266,12 @@ def _build_app(root: str):  # noqa: ANN202
 
             td = _project_transcript_dir(root)
             if not td:
-                table.add_row('No transcripts found', '', '', '', '')
+                table.add_row('No transcripts found', '', '', '', '', '')
                 return
 
             files = sorted(_glob.glob(td + '/*.jsonl'), key=os.path.getmtime, reverse=True)[:20]
             if not files:
-                table.add_row('No sessions found', '', '', '', '')
+                table.add_row('No sessions found', '', '', '', '', '')
                 return
 
             for fpath in files:
@@ -235,13 +281,20 @@ def _build_app(root: str):  # noqa: ANN202
                 mtime    = datetime.fromtimestamp(r['mtime'])
                 date_str = mtime.strftime('%m-%d %H:%M')
                 ratio    = r['ratio']
-                signal   = '✓' if ratio < 2 else ('⚠' if ratio > 5 else '~')
+                cache_k  = f'{r["cache_reads"] // 1000}k' if r.get('cache_reads', 0) >= 1000 else str(r.get('cache_reads', 0))
+                if ratio < 2:
+                    eff = '[green]good[/green]'
+                elif ratio > 5:
+                    eff = '[red]high — context may not be landing[/red]'
+                else:
+                    eff = '[yellow]normal[/yellow]'
                 table.add_row(
                     date_str,
                     str(r['reads']),
                     str(r['edits']),
-                    f"{ratio:.1f}×",
-                    signal,
+                    f'{ratio:.1f}×',
+                    cache_k,
+                    eff,
                 )
 
     # ── Health pane ──────────────────────────────────────────────
@@ -249,53 +302,122 @@ def _build_app(root: str):  # noqa: ANN202
     class HealthPane(ScrollableContainer):
         def compose(self) -> ComposeResult:
             yield Static('', id='health-body')
-            yield Label('\n[b]Task Slots[/b]', id='slots-header')
-            yield Static('', id='slots-body')
 
         def on_mount(self) -> None:
             self.refresh_health()
 
         def refresh_health(self) -> None:
             h = context_health(root)
-            score = h['staleness_score']
-            band  = h['staleness_band']
+            score     = h['staleness_score']
+            band      = h['staleness_band']
+            freshness = 10 - score  # 10 = perfectly synced, 0 = critical
             color = {'fresh': 'green', 'acceptable': 'yellow',
                      'stale': 'orange1', 'critical': 'red'}.get(band, 'white')
 
-            lines = [f"[b]Score:[/b] [{color}]{score}/10 ({band})[/{color}]"]
-            if h.get('commits_since_sync') is not None:
-                lines.append(f"[b]Commits since sync:[/b] {h['commits_since_sync']}")
+            band_label = {
+                'fresh':      'up to date',
+                'acceptable': 'mostly current',
+                'stale':      'stale — run cram sync',
+                'critical':   'critical — run cram sync now',
+            }.get(band, band)
+
+            lines = [
+                f'[b]Freshness:[/b] [{color}]{freshness}/10[/{color}]  [{color}]{band_label}[/{color}]',
+            ]
+            commits = h.get('commits_since_sync')
+            if commits is not None:
+                noun = 'commit' if commits == 1 else 'commits'
+                lines.append(f'[b]Commits since last sync:[/b] {commits} {noun}')
             if h.get('last_commit_age'):
-                lines.append(f"[b]Last commit:[/b] {h['last_commit_age']}")
+                lines.append(f'[b]Last commit:[/b] {h["last_commit_age"]}')
+
             lines.append('')
+            lines.append('[b]Context files:[/b]')
             for fname, info in h.get('files', {}).items():
-                bs = info.get('budget_status', 'ok')
-                fc = 'green' if bs == 'ok' else ('yellow' if bs == 'warn' else 'red')
-                lines.append(f"  [{fc}]{fname:<22}[/{fc}] {info['tokens']:>5} tok  {bs}")
+                bs     = info.get('budget_status', 'ok')
+                budget = info.get('budget')
+                fc     = 'green' if bs == 'ok' else ('yellow' if bs == 'near' else 'red')
+                budget_str = f'/ {budget:,}' if budget else ''
+                note = ''
+                if bs == 'near':
+                    note = '  [yellow]approaching soft target[/yellow]'
+                elif bs == 'over':
+                    note = '  [yellow]over soft target (informational only)[/yellow]'
+                lines.append(
+                    f'  [{fc}]{fname:<22}[/{fc}]  {info["tokens"]:>5} tok {budget_str}{note}'
+                )
 
             self.query_one('#health-body', Static).update('\n'.join(lines))
 
-            # Task slots
-            tasks_dir = os.path.join(root, '.ai-context', 'tasks')
-            slots = sorted(glob.glob(os.path.join(tasks_dir, '*.md')))
-            slots_text = ''
-            for s in slots:
-                name = os.path.basename(s).replace('.md', '')
-                age  = datetime.fromtimestamp(os.path.getmtime(s)).strftime('%m-%d %H:%M')
-                slots_text += f"  {name:<35} [dim]{age}[/dim]\n"
-            if not slots_text:
-                slots_text = '  [dim]No active task slots.[/dim]\n'
-            self.query_one('#slots-body', Static).update(slots_text)
+    # ── History pane ─────────────────────────────────────────────
+
+    class HistoryPane(VerticalScroll):
+        def compose(self) -> ComposeResult:
+            yield Static('', id='history-body')
+
+        def on_mount(self) -> None:
+            self.refresh_history()
+
+        def refresh_history(self) -> None:
+            import json as _json
+            history_path = os.path.join(root, '.ai-context', 'TASK_HISTORY.jsonl')
+            if not os.path.exists(history_path):
+                self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
+                return
+            try:
+                entries = []
+                with open(history_path, errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            entries.append(_json.loads(line))
+                if not entries:
+                    self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
+                    return
+                entries = entries[::-1]
+                lines = ['[b]Recent Tasks[/b]\n']
+                for e in entries:
+                    ts = e.get('ts', '')[:16].replace('T', ' ')
+                    task = e.get('task', '')
+                    lines.append(f'  [dim]{ts}[/dim]  {task}')
+                self.query_one('#history-body', Static).update('\n'.join(lines))
+            except Exception as ex:
+                self.query_one('#history-body', Static).update(f'[red]Error: {ex}[/red]')
+
+    # ── Actions pane ─────────────────────────────────────────────
+
+    _ACTIONS_MENU = (
+        '[b]Commands[/b]\n\n'
+        '  [yellow bold]s[/yellow bold]       cram sync       re-generate context from codebase\n'
+        '  [yellow bold]t[/yellow bold]       cram task …     set a new task (opens input)\n'
+        '  [yellow bold]b[/yellow bold]       cram benchmark  show token savings table\n'
+        '  [yellow bold]ctrl+k[/yellow bold]  cram doctor     check setup health\n'
+    )
+
+    class ActionsPane(VerticalScroll):
+        def compose(self) -> ComposeResult:
+            yield Static(_ACTIONS_MENU, id='actions-menu')
+            yield Label('[b]Output[/b]', id='output-header')
+            yield RichLog(id='output-log', highlight=True, markup=True, wrap=True)
+
+        def start_command(self, cmd_str: str) -> None:
+            log = self.query_one('#output-log', RichLog)
+            log.clear()
+            log.write(f'[dim]$ {cmd_str}[/dim]\n')
+
+        def append_output(self, text: str) -> None:
+            self.query_one('#output-log', RichLog).write(text)
 
     # ── Main app ─────────────────────────────────────────────────
 
     class CramApp(App):
         TITLE = 'cram-ai'
         CSS = """
-        DecisionsPane, SessionsPane, HealthPane {
+        DecisionsPane, SessionsPane, HealthPane, ActionsPane {
             padding: 1 2;
         }
-        Label#pending-header, Label#accepted-header, Label#slots-header {
+        Label#pending-header, Label#accepted-header, Label#slots-header,
+        Label#output-header {
             color: $accent;
             padding: 1 0 0 0;
         }
@@ -305,12 +427,50 @@ def _build_app(root: str):  # noqa: ANN202
         Footer {
             background: $surface;
         }
+        ListView {
+            height: auto;
+            max-height: 14;
+            border: solid $surface-lighten-2;
+            margin-bottom: 1;
+        }
+        ListView > ListItem {
+            padding: 0 1;
+        }
+        ListView > ListItem.--highlight {
+            background: $accent 20%;
+        }
+        RichLog {
+            height: 1fr;
+            min-height: 8;
+            border: solid $surface-lighten-2;
+            padding: 0 1;
+        }
+        #actions-menu {
+            margin-bottom: 1;
+        }
+        TaskInputModal {
+            align: center middle;
+        }
+        #modal-dialog {
+            background: $surface;
+            border: thick $accent;
+            padding: 1 2;
+            width: 64;
+            height: auto;
+        }
+        #modal-input {
+            margin-bottom: 1;
+        }
         """
         BINDINGS = [
-            Binding('a', 'approve', 'Approve'),
-            Binding('d', 'delete',  'Delete'),
-            Binding('r', 'refresh', 'Refresh'),
-            Binding('q', 'quit',    'Quit'),
+            Binding('a',      'approve',   'Approve',   show=True),
+            Binding('d',      'delete',    'Delete',    show=True),
+            Binding('r',      'refresh',   'Refresh',   show=True),
+            Binding('s',      'sync',      'Sync',      show=True),
+            Binding('t',      'task',      'Task',      show=True),
+            Binding('b',      'benchmark', 'Benchmark', show=True),
+            Binding('ctrl+k', 'doctor',    'Doctor',    show=True),
+            Binding('q',      'quit',      'Quit',      show=True),
         ]
 
         def compose(self) -> ComposeResult:
@@ -322,6 +482,10 @@ def _build_app(root: str):  # noqa: ANN202
                     yield SessionsPane(id='sessions-pane')
                 with TabPane('Health', id='health'):
                     yield HealthPane(id='health-pane')
+                with TabPane('History', id='history'):
+                    yield HistoryPane(id='history-pane')
+                with TabPane('Actions', id='actions'):
+                    yield ActionsPane(id='actions-pane')
             yield Footer()
 
         def on_mount(self) -> None:
@@ -332,11 +496,12 @@ def _build_app(root: str):  # noqa: ANN202
             pane = self.query_one('#decisions-pane', DecisionsPane)
             n = pane.pending_count()
             repo_name = os.path.basename(root)
-            pending = f'  •  {n} pending' if n else ''
-            self.sub_title = f'{repo_name}{pending}'
+            self.sub_title = f'{repo_name}  •  {n} pending' if n else repo_name
 
         def _auto_refresh(self) -> None:
             self.action_refresh()
+
+        # ── Decision actions ──────────────────────────────────────
 
         def action_approve(self) -> None:
             pane = self.query_one('#decisions-pane', DecisionsPane)
@@ -361,6 +526,7 @@ def _build_app(root: str):  # noqa: ANN202
                 ('#decisions-pane', 'refresh_decisions'),
                 ('#sessions-pane',  'refresh_sessions'),
                 ('#health-pane',    'refresh_health'),
+                ('#history-pane',   'refresh_history'),
             ]:
                 try:
                     w = self.query_one(widget_id)
@@ -368,6 +534,53 @@ def _build_app(root: str):  # noqa: ANN202
                 except Exception:
                     pass
             self._update_title()
+
+        # ── CLI actions ───────────────────────────────────────────
+
+        def _run_cli(self, cmd: list[str]) -> None:
+            """Switch to Actions tab, show command, run it in a worker thread."""
+            try:
+                self.query_one(TabbedContent).active = 'actions'
+            except Exception:
+                pass
+            actions = self.query_one('#actions-pane', ActionsPane)
+            actions.start_command(' '.join(cmd))
+
+            def _task() -> str:
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, cwd=root)
+                    return (r.stdout or '') + (r.stderr or '')
+                except Exception as exc:
+                    return f'Error: {exc}\n'
+
+            self.run_worker(_task, thread=True, exclusive=True, name='cli-cmd')
+
+        def on_worker_state_changed(self, event) -> None:
+            if event.worker.name == 'cli-cmd' and event.state == WorkerState.SUCCESS:
+                try:
+                    actions = self.query_one('#actions-pane', ActionsPane)
+                    actions.append_output(event.worker.result or '(no output)\n')
+                except Exception:
+                    pass
+
+        def action_sync(self) -> None:
+            self._run_cli(['cram', 'sync'])
+            self.notify('Running cram sync…')
+
+        def action_benchmark(self) -> None:
+            self._run_cli(['cram', 'benchmark'])
+            self.notify('Running cram benchmark…')
+
+        def action_doctor(self) -> None:
+            self._run_cli(['cram', 'doctor'])
+            self.notify('Running cram doctor…')
+
+        @work
+        async def action_task(self) -> None:
+            description = await self.push_screen_wait(TaskInputModal())
+            if description:
+                self._run_cli(['cram', 'task', description])
+                self.notify(f'Running cram task "{description}"…')
 
     return CramApp
 

@@ -15,6 +15,11 @@ def _row(ok: bool | None, label: str, detail: str = '') -> None:
     print(f'  {icon}  {label}{tail}')
 
 
+def _detail(text: str) -> None:
+    """Print an indented detail line under a check row."""
+    print(f'       {text}')
+
+
 def main() -> None:
     from cram.utils import find_git_root, discover_models, pick_context_model, pick_coding_model
 
@@ -26,14 +31,16 @@ def main() -> None:
     # ── Python ────────────────────────────────────────────────────
     v = sys.version_info
     ok = v >= (3, 8)
-    _row(ok, f'Python {v.major}.{v.minor}.{v.micro}')
+    _row(ok, f'Python {v.major}.{v.minor}.{v.micro}',
+         'required ≥ 3.8' if not ok else f'at {sys.executable}')
     if not ok:
         errors += 1
 
     # ── git ───────────────────────────────────────────────────────
     try:
-        subprocess.run(['git', '--version'], capture_output=True, check=True)
-        _row(True, 'git')
+        result = subprocess.run(['git', '--version'], capture_output=True, check=True, text=True)
+        git_ver = result.stdout.strip().replace('git version ', '')
+        _row(True, 'git', git_ver)
     except Exception:
         _row(False, 'git not found', 'install from https://git-scm.com')
         errors += 1
@@ -41,7 +48,7 @@ def main() -> None:
     # ── repo ──────────────────────────────────────────────────────
     try:
         repo = find_git_root()
-        _row(True, 'git repo', os.path.basename(repo))
+        _row(True, 'git repo', repo)
     except Exception:
         _row(False, 'not in a git repo', 'run from inside a git repository')
         errors += 1
@@ -55,18 +62,29 @@ def main() -> None:
             if os.path.basename(ctx) == LEGACY_CONTEXT_DIR:
                 _row(None, label, f'legacy name — migrate to {CONTEXT_DIR}/')
             else:
-                _row(True, label)
+                _row(True, label, ctx)
 
             for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'SYMBOLS.md'):
                 p = os.path.join(ctx, fname)
                 if os.path.exists(p) and os.path.getsize(p) > 0:
-                    _row(True, f'  {fname}')
+                    size_kb = os.path.getsize(p) / 1024
+                    _row(True, f'  {fname}', f'{size_kb:.1f} KB')
                 else:
                     _row(None, f'  {fname} missing', 'run `cram sync` to rebuild')
 
             task_p = os.path.join(ctx, 'CURRENT_TASK.md')
             if os.path.exists(task_p) and os.path.getsize(task_p) > 100:
-                _row(True, '  CURRENT_TASK.md', 'task set')
+                # Extract task name for display
+                task_name = ''
+                try:
+                    for line in open(task_p, errors='ignore'):
+                        s = line.strip()
+                        if s.startswith('# Task:'):
+                            task_name = s[len('# Task:'):].strip()
+                            break
+                except Exception:
+                    pass
+                _row(True, '  CURRENT_TASK.md', task_name or 'task set')
             else:
                 _row(None, '  CURRENT_TASK.md not set', 'run `cram task "..."` before your session')
 
@@ -78,9 +96,9 @@ def main() -> None:
                     cwd=repo, capture_output=True,
                 )
                 if r.returncode == 0:
-                    _row(True, 'context committed', 'teammates get context automatically')
+                    _row(True, 'context committed to git', 'teammates get context automatically')
                 else:
-                    _row(None, 'context not committed',
+                    _row(None, 'context not committed to git',
                          f'git add {CONTEXT_DIR}/ && git commit -m "chore: init cram-ai"')
             except Exception:
                 pass
@@ -94,11 +112,14 @@ def main() -> None:
         pc  = os.path.exists(os.path.join(hooks, 'post-commit'))
         pco = os.path.exists(os.path.join(hooks, 'post-checkout'))
         if pc and pco:
-            _row(True, 'git hooks', 'post-commit + post-checkout')
+            _row(True, 'git hooks', 'post-commit + post-checkout installed')
+            _detail('ARCHITECTURE.md and SYMBOLS.md auto-update on every commit')
         elif pc:
             _row(None, 'git hooks', 'post-commit only — re-run `cram init` to add post-checkout')
+            _detail('context updates on commit but not on branch switch')
         else:
             _row(None, 'git hooks not installed', 'run `cram hook install` to enable auto-sync on commit')
+            _detail('without hooks, run `cram sync` manually after making changes')
 
     # ── models ────────────────────────────────────────────────────
     print()
@@ -118,14 +139,15 @@ def main() -> None:
         else:
             ctx_m  = pick_context_model(available)
             code_m = pick_coding_model(available)
-            _row(True, 'context model', ctx_m['name']  if ctx_m  else '—')
-            _row(True, 'coding model',  code_m['name'] if code_m else '—')
-            other_providers = sorted({
-                m['provider'] for m in available
-                if m not in (ctx_m, code_m)
-            })
-            if other_providers:
-                _row(True, 'also available', ', '.join(other_providers))
+            _row(True, 'context model (best available)', ctx_m['name']  if ctx_m  else '—')
+            _detail('used for: cram task / get_context() — lightweight, fast')
+            _row(True, 'coding model (best available)',  code_m['name'] if code_m else '—')
+            _detail('recommendation only — cram does not control which model you use in your editor')
+            all_models = sorted({m['name'] for m in available} - {
+                ctx_m['name'] if ctx_m else '', code_m['name'] if code_m else ''
+            } - {''})
+            if all_models:
+                _row(True, 'other detected models', ', '.join(all_models))
     except Exception as exc:
         _row(None, f'model discovery error: {exc}')
 

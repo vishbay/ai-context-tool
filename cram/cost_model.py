@@ -49,7 +49,7 @@ FILE_BUDGETS = {
     'ARCHITECTURE.md': int(os.environ.get('CRAM_BUDGET_ARCHITECTURE', '3000')),
     'DECISIONS.md':    int(os.environ.get('CRAM_BUDGET_DECISIONS',    '1500')),
     'GOTCHAS.md':      int(os.environ.get('CRAM_BUDGET_GOTCHAS',      '800')),
-    'CURRENT_TASK.md': int(os.environ.get('CRAM_BUDGET_TASK',         '800')),
+    'CURRENT_TASK.md': int(os.environ.get('CRAM_BUDGET_TASK',         '2000')),
 }
 
 
