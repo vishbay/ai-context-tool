@@ -26,9 +26,6 @@ pip install 'cram-ai[mcp,tray]'
 
 # With additional model providers (OpenAI, Gemini, Bedrock, Ollama …)
 pip install 'cram-ai[mcp,multi-provider]'
-
-# Homebrew (macOS)
-brew tap vishbay/cram-ai && brew install cram-ai
 ```
 
 ---
@@ -53,7 +50,7 @@ git add .cram-ai-context/ CLAUDE.md
 git commit -m "chore: init cram-ai context layer"
 ```
 
-Then wire up your tool of choice — [MCP](#mcp-delivery) or [prefix injection](#prefix-injection).
+Then wire up your tool of choice — [MCP](#mcp-delivery) or [file-based delivery](#file-based-delivery).
 
 ---
 
@@ -135,7 +132,7 @@ server once and the tool can call context tools directly.
 
 ---
 
-## Prefix injection
+## File-based delivery
 
 For tools that don't support MCP, run `cram task "..." --target <tool>` before your session.
 cram writes focused context into the file the tool auto-loads at startup.
@@ -163,7 +160,7 @@ cram task "add pagination to the users endpoint" --target all
 | `windsurf` | `.windsurf/rules/cram-task.md` |
 | `copilot` | `.github/cram-task.md` |
 | `codex` | `.cram-ai-context/AGENTS.md` |
-| `claude` | `CLAUDE.md` (escape hatch; prefer MCP for Claude Code) |
+| `claude` | `CLAUDE.md` (escape hatch for Claude Code; prefer MCP) |
 | `all` | All of the above |
 
 ---
@@ -174,7 +171,7 @@ cram task "add pagination to the users endpoint" --target all
 # Before a session — MCP path (Claude Code / Cursor / Windsurf / Zed)
 # Nothing to run. The agent calls get_context() itself.
 
-# Before a session — injection path (Copilot / no-MCP tools)
+# Before a session — file-based delivery (Copilot / no-MCP tools)
 cram task "fix the rate limiter" --target copilot
 
 # Log a decision while working
@@ -369,9 +366,9 @@ Anthropic's prompt cache has a 5-minute TTL. Content in the conversation **prefi
 cache-written at 1.25× the base input price on every new session and every TTL expiry.
 Content that doesn't touch the prefix — like MCP tool results — isn't.
 
-**Prefix injection vs MCP:**
+**File-based delivery vs MCP:**
 
-| | Prefix injection (`--target claude`) | MCP (`get_context()`) |
+| | File-based delivery (`--target claude`) | MCP (`get_context()`) |
 |---|---|---|
 | Where context lands | CLAUDE.md → front of prefix | Conversation tail (tool result) |
 | Cache writes per session | N × task context tokens | 1 × tool definitions (~1–2K tokens) |
