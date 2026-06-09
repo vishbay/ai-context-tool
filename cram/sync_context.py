@@ -8,12 +8,11 @@ import time
 from cram.init import scan_structure
 from cram.utils import call_model, call_context_model, strip_code_fence
 from cram.symbols import write_symbols_md
+from cram.context_dir import CONTEXT_DIR, has_context_dir, resolve_context_dir
 
 MAX_LINES = int(os.environ.get('AICONTEXT_MAX_LINES', '300'))
 # A commit within this window of setting a task is treated as mid-session.
 TASK_GRACE_SECONDS = int(os.environ.get('CRAM_TASK_GRACE_SECONDS', str(10 * 60)))
-
-CONTEXT_DIR = '.cram-ai-context'
 
 SESSION_ENDED_TEMPLATE = """\
 # Current Task
@@ -56,7 +55,7 @@ def reset_task(root: str) -> None:
     """Unconditionally reset CURRENT_TASK.md and all target files to the session-ended placeholder."""
     from cram import targets as _targets
     root = os.path.abspath(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root, warn=True)
     task_path = os.path.join(context_dir, 'CURRENT_TASK.md')
     if not os.path.isdir(context_dir):
         return
@@ -111,10 +110,10 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
 
 def sync(root: str = '.') -> None:
     root = os.path.abspath(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root, warn=True)
     arch_path = os.path.join(context_dir, 'ARCHITECTURE.md')
 
-    if not os.path.isdir(context_dir):
+    if not has_context_dir(root):
         print(
             f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.",
             file=sys.stderr,

@@ -4,11 +4,11 @@ from __future__ import annotations
 import os
 import re
 
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, resolve_context_dir
 
 _SKIP_DIRS = {
     '.git', '.venv', 'venv', 'node_modules', '__pycache__',
-    'dist', 'build', '.next', 'coverage', CONTEXT_DIR,
+    'dist', 'build', '.next', 'coverage', CONTEXT_DIR, LEGACY_CONTEXT_DIR,
 }
 
 # (extensions, compiled pattern) — groups capture identifier names
@@ -97,7 +97,7 @@ def extract_symbols(root: str) -> str:
 def write_symbols_md(root: str) -> tuple[str, int]:
     """Generate SYMBOLS.md in the context dir. Returns (content, identifier_count)."""
     content = extract_symbols(root)
-    path = os.path.join(root, CONTEXT_DIR, 'SYMBOLS.md')
+    path = os.path.join(resolve_context_dir(root, warn=True), 'SYMBOLS.md')
     with open(path, 'w') as f:
         f.write(content)
     count = sum(1 for line in content.splitlines() if ': ' in line

@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, has_context_dir, resolve_context_dir
 
 
 def _row(ok: bool | None, label: str, detail: str = '') -> None:
@@ -49,9 +49,13 @@ def main() -> None:
 
     # ── context dir ───────────────────────────────────────────────
     if repo:
-        ctx = os.path.join(repo, CONTEXT_DIR)
-        if os.path.isdir(ctx):
-            _row(True, f'{CONTEXT_DIR}/')
+        ctx = resolve_context_dir(repo)
+        if has_context_dir(repo):
+            label = f'{os.path.basename(ctx)}/'
+            if os.path.basename(ctx) == LEGACY_CONTEXT_DIR:
+                _row(None, label, f'legacy name — migrate to {CONTEXT_DIR}/')
+            else:
+                _row(True, label)
 
             for fname in ('ARCHITECTURE.md', 'DECISIONS.md', 'GOTCHAS.md', 'SYMBOLS.md'):
                 p = os.path.join(ctx, fname)
@@ -70,7 +74,7 @@ def main() -> None:
             try:
                 r = subprocess.run(
                     ['git', 'ls-files', '--error-unmatch',
-                     os.path.join(ctx, 'ARCHITECTURE.md')],
+                     os.path.relpath(os.path.join(ctx, 'ARCHITECTURE.md'), repo)],
                     cwd=repo, capture_output=True,
                 )
                 if r.returncode == 0:

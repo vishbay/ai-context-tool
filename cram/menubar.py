@@ -7,6 +7,8 @@ import sys
 import threading
 import time
 
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, resolve_context_dir
+
 try:
     import rumps
 except ImportError:
@@ -17,11 +19,10 @@ except ImportError:
     )
     sys.exit(1)
 
-CONTEXT_DIR = '.cram-ai-context'
 VALID_TARGETS = ["cursor", "claude", "copilot", "codex", "windsurf", "all"]
 
 _EXCLUDE_SCAN = {
-    '.git', CONTEXT_DIR, 'node_modules', '__pycache__',
+    '.git', CONTEXT_DIR, LEGACY_CONTEXT_DIR, 'node_modules', '__pycache__',
     '.venv', 'venv', 'dist', 'build', '.next', 'coverage',
 }
 _SCAN_EXTS = {
@@ -85,7 +86,7 @@ class CramMenuBar(rumps.App):
     # ── helpers ───────────────────────────────────────────────────
 
     def _load_default_target(self) -> str:
-        config_path = os.path.join(self.repo_path, CONTEXT_DIR, 'config.toml')
+        config_path = os.path.join(resolve_context_dir(self.repo_path), 'config.toml')
         if os.path.exists(config_path):
             try:
                 try:
@@ -152,7 +153,7 @@ class CramMenuBar(rumps.App):
         rumps.alert(title="Token Metrics — cram-ai", message=self._build_metrics(), ok="Close")
 
     def _build_metrics(self) -> str:
-        context_dir = os.path.join(self.repo_path, CONTEXT_DIR)
+        context_dir = resolve_context_dir(self.repo_path)
         if not os.path.isdir(context_dir):
             return f"No {CONTEXT_DIR}/ found.\nRun `cram init` first."
 

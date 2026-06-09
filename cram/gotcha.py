@@ -5,7 +5,8 @@ import os
 import sys
 from datetime import date
 
-CONTEXT_DIR  = '.cram-ai-context'
+from cram.context_dir import CONTEXT_DIR, context_path, context_basename
+
 GOTCHAS_FILE = 'GOTCHAS.md'
 
 
@@ -17,7 +18,7 @@ def _next_gotcha_id(content: str) -> str:
 
 
 def append_gotcha(root: str, trap_text: str) -> None:
-    path = os.path.join(root, CONTEXT_DIR, GOTCHAS_FILE)
+    path = context_path(root, GOTCHAS_FILE, warn=True)
     if not os.path.exists(path):
         print(f"Error: {path} not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
@@ -40,7 +41,7 @@ def append_gotcha(root: str, trap_text: str) -> None:
     with open(path, 'a') as f:
         f.write(entry)
 
-    print(f"Added [{gotcha_id}] to {CONTEXT_DIR}/{GOTCHAS_FILE}")
+    print(f"Added [{gotcha_id}] to {context_basename(root)}/{GOTCHAS_FILE}")
     print(f"  Edit the file to fill in File/area, Why it exists, and Safe pattern.")
 
 

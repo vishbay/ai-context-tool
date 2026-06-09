@@ -6,7 +6,8 @@ surfaces always report the same numbers.
 from __future__ import annotations
 import os
 
-from cram.status import get_status_dict, CONTEXT_DIR
+from cram.status import get_status_dict
+from cram.context_dir import resolve_context_dir
 from cram.cost_model import FILE_BUDGETS, budget_status
 
 _TRACKED = (
@@ -28,7 +29,7 @@ def context_health(root: str) -> dict:
     """
     root = os.path.abspath(root)
     status = get_status_dict(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root)
     files: dict = {}
 
     for fname in _TRACKED:

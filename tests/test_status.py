@@ -114,6 +114,15 @@ class TestGetStatusDictBackCompat:
         result = get_status_dict(str(tmp_path))
         assert result['state'] == 'not-init'
 
+    def test_legacy_context_dir_counts_as_initialized(self, tmp_path):
+        ctx = tmp_path / '.cram-ai-context'
+        ctx.mkdir()
+        (ctx / 'ARCHITECTURE.md').write_text('# Arch\n')
+
+        result = get_status_dict(str(tmp_path))
+        assert result['state'] in ('stale', 'fresh')
+        assert 'ARCHITECTURE.md' in result['files']
+
 
 # ---------------------------------------------------------------------------
 # Integration: real git repo with N commits after ARCHITECTURE.md

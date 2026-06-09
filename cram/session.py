@@ -6,12 +6,13 @@ import os
 import time
 from datetime import datetime
 
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import resolve_context_dir
+
 SESSION_FILE = 'session.json'
 
 
 def _session_path(root: str) -> str:
-    return os.path.join(root, CONTEXT_DIR, SESSION_FILE)
+    return os.path.join(resolve_context_dir(root), SESSION_FILE)
 
 
 def save_session(root: str, task: str, grace_seconds: int | None = None) -> str:

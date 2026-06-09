@@ -11,11 +11,11 @@ cache reads. On a large monorepo this can consume $1.57 per session before any c
 ## Solution
 
 A lightweight, open source CLI called `cram` (pip package: `cram-ai`) that maintains a set of
-curated `.cram-ai-context/` markdown files per repo. These act as a manual RAG system — giving
+curated `.ai-context/` markdown files per repo. These act as a manual RAG system — giving
 the AI model a precise map of the codebase instead of letting it index everything.
 
 Key insight: AI coding agents spend most tokens on **orientation, not problem solving**.
-A 12,000-token session often only needs 800 tokens of actual work. `.cram-ai-context/`
+A 12,000-token session often only needs 800 tokens of actual work. `.ai-context/`
 eliminates orientation cost.
 
 ---
@@ -75,14 +75,14 @@ cram-ai/                          ← repo root
 cram init [path]                        # one-time repo setup
 cram task "<description>" [--target T]  # populate CURRENT_TASK.md + auto-load into tool
 cram sync [path]                        # update ARCHITECTURE.md after a commit
-cram status [path]                      # show .cram-ai-context/ freshness
+cram status [path]                      # show .ai-context/ freshness
 cram hook install|uninstall [path]      # manage git post-commit hook
 cram menu [path]                        # launch Mac menu bar app
 ```
 
 `--target` choices: `cursor | claude | copilot | codex | windsurf | all`
 
-Set a permanent default in `.cram-ai-context/config.toml`:
+Set a permanent default in `.ai-context/config.toml`:
 ```toml
 [task]
 default_target = "cursor"
@@ -92,7 +92,7 @@ default_target = "cursor"
 
 ## Context Directory
 
-`.cram-ai-context/` is created at the repo root by `cram init`.
+`.ai-context/` is created at the repo root by `cram init`.
 
 | File | Purpose | Managed by |
 |---|---|---|
@@ -114,9 +114,9 @@ No shared developer-managed files (CLAUDE.md, copilot-instructions.md, etc.) are
 | Target | File written | How it loads |
 |---|---|---|
 | `cursor` | `.cursor/rules/cram-task.md` | Cursor reads every file in `.cursor/rules/` |
-| `claude` | `.cram-ai-context/CLAUDE.md` | Claude Code reads `CLAUDE.md` recursively in subdirs |
+| `claude` | `.ai-context/CLAUDE.md` | Claude Code reads `CLAUDE.md` recursively in subdirs |
 | `copilot` | `.github/cram-task.md` | Requires one-time include in `copilot-instructions.md` |
-| `codex` | `.cram-ai-context/AGENTS.md` | Codex reads `AGENTS.md` recursively in subdirs |
+| `codex` | `.ai-context/AGENTS.md` | Codex reads `AGENTS.md` recursively in subdirs |
 | `windsurf` | `.windsurf/rules/cram-task.md` | Windsurf reads every file in `.windsurf/rules/` |
 
 ---
@@ -204,7 +204,7 @@ cram/
 │ [         Cram it         ] │
 │ ─────────────────────────── │
 │ ↺ Sync context              │
-│ 📁 Open .cram-ai-context/   │
+│ 📁 Open .ai-context/   │
 │ ⏻  Quit                     │
 └─────────────────────────────┘
 ```
@@ -324,7 +324,7 @@ pyinstaller --onefile --windowed cram/tray.py
 ## Session Protocol (Document in README)
 
 1. Run `cram task "..." --target <tool>` before opening your AI extension
-2. The tool auto-loads `.cram-ai-context/CURRENT_TASK.md` context — no hunting
+2. The tool auto-loads `.ai-context/CURRENT_TASK.md` context — no hunting
 3. Hard session boundary: end session when the feature works, not when everything feels done
 4. Same file + same concern = stay in session. Different file or concern = new session
 5. `cram sync` fires automatically via git hook after every commit
@@ -371,7 +371,7 @@ Code duplication has risen 4x with AI adoption. Dev teams juggling six or more t
 ### Three integration patterns
 
 **Pattern 1 — Pre-flight context injection**
-Run cram before spawning any coding agent. The agent reads `.cram-ai-context/CURRENT_TASK.md`
+Run cram before spawning any coding agent. The agent reads `.ai-context/CURRENT_TASK.md`
 instead of indexing the repo itself:
 
 ```python
@@ -549,7 +549,7 @@ cram audit   # scans repo vs ARCHITECTURE.md, reports what's missing or stale
              # output: "12 new files not in ARCHITECTURE.md, 3 deleted files still referenced"
 ```
 
-### 3. Team shared context (`.cram-ai-context/` in git)
+### 3. Team shared context (`.ai-context/` in git)
 Currently CURRENT_TASK.md is gitignored (per-developer). ARCHITECTURE.md and
 DECISIONS.md should be committed and shared — the orientation cost is paid once
 and benefits the whole team. Add a `cram team` command:

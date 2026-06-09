@@ -30,12 +30,11 @@ from cram.cost_model import (
     MODEL_BASE, WRITE_MULT, READ_MULT, ORIENT_FILES, SESSIONS_PER_DAY,
     TASKS_PER_SESSION, CostInputs, daily_costs, orientation_tokens,
 )
-
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, has_context_dir, resolve_context_dir
 
 _SKIP_DIRS = {
     '.git', '.venv', 'venv', 'node_modules', '__pycache__',
-    'dist', 'build', '.next', 'coverage', CONTEXT_DIR,
+    'dist', 'build', '.next', 'coverage', CONTEXT_DIR, LEGACY_CONTEXT_DIR,
     '.pytest_cache', '.github', '.devcontainer',
 }
 _SRC_EXTS = {
@@ -99,9 +98,9 @@ def _bar(ratio: float, width: int = 24) -> str:
 
 def run_benchmark(root: str) -> None:
     repo_name   = os.path.basename(root)
-    context_dir = os.path.join(root, CONTEXT_DIR)
+    context_dir = resolve_context_dir(root, warn=True)
 
-    if not os.path.isdir(context_dir):
+    if not has_context_dir(root):
         print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
 

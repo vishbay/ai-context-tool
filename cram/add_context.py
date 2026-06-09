@@ -5,7 +5,7 @@ import os
 import re
 import sys
 
-CONTEXT_DIR = '.cram-ai-context'
+from cram.context_dir import CONTEXT_DIR, context_path, has_context_dir
 
 
 def _read_task_text(content: str) -> str:
@@ -40,7 +40,7 @@ def add_files(
     from cram.utils import find_git_root as _find_git_root
     from cram import targets as _targets
 
-    task_path = os.path.join(CONTEXT_DIR, 'CURRENT_TASK.md')
+    task_path = context_path('.', 'CURRENT_TASK.md', warn=True)
     if not os.path.exists(task_path):
         print('Error: no active session. Run `cram task "..."` first.', file=sys.stderr)
         return False
@@ -98,7 +98,7 @@ def add_files(
     root = _find_git_root(os.getcwd())
     eff_target = target if target is not None else _targets.load_default_target(root)
     if eff_target:
-        arch_path = os.path.join(CONTEXT_DIR, 'ARCHITECTURE.md')
+        arch_path = context_path('.', 'ARCHITECTURE.md', warn=True)
         arch = open(arch_path).read() if os.path.exists(arch_path) else ''
         if eff_target == 'all':
             for p in _targets.write_to_all_detected(root, current, arch):
@@ -134,7 +134,7 @@ def main() -> None:
     start = os.path.abspath(args.path) if args.path else os.getcwd()
     root  = find_git_root(start)
 
-    if not os.path.isdir(os.path.join(root, CONTEXT_DIR)):
+    if not has_context_dir(root):
         print(f'Error: {CONTEXT_DIR}/ not found in {root}.', file=sys.stderr)
         sys.exit(1)
 

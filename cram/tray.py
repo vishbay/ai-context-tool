@@ -44,6 +44,7 @@ try:
     from cram import tray_server
     from cram.tray_server import get_active_repo as _get_repo, get_active_port as _get_port
     from cram.status import get_status_dict
+    from cram.context_dir import resolve_context_dir
     from cram.utils import find_git_root as _find_git_root
 except ImportError as exc:
     print(
@@ -115,7 +116,7 @@ class _PopupAPI:
         return None
 
     def open_folder(self) -> None:
-        context_dir = os.path.join(self._repo, '.cram-ai-context')
+        context_dir = resolve_context_dir(self._repo)
         target = context_dir if os.path.isdir(context_dir) else self._repo
         if sys.platform == 'darwin':
             subprocess.Popen(['open', target])
@@ -274,7 +275,7 @@ def _build_menu(repo_path: str) -> pystray.Menu:
 
     def on_open_folder(icon, item):
         repo   = _get_repo()
-        cd     = os.path.join(repo, '.cram-ai-context')
+        cd     = resolve_context_dir(repo)
         target = cd if os.path.isdir(cd) else repo
         if sys.platform == 'darwin':
             subprocess.Popen(['open', target])
