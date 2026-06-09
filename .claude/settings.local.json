@@ -124,7 +124,29 @@
       "Bash(echo \"exit: $? \\(expected 0, no output\\)\")",
       "Bash(echo \"exit: $? output_lines: $\\(python3 /Users/vishbay/cram-ai/.claude/hooks/cram_session_start.py)",
       "Bash(/Users/vishbay/cram-ai/.venv/bin/cram init *)",
-      "Bash(curl -s http://127.0.0.1:49157/metrics)"
+      "Bash(curl -s http://127.0.0.1:49157/metrics)",
+      "Bash(gh api *)",
+      "Bash(.venv/bin/python -m pytest tests/test_targets.py -q)",
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Read(//Users/vishbay/SideQuests/**)",
+      "Read(//Users/vishbay/**)",
+      "Bash(cram --version)",
+      "mcp__cram-ai__get_context"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "cram-ai"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/vishbay/cram-ai/.claude/hooks/cram_session_start.py"
+          }
+        ]
+      }
     ]
   }
 }

@@ -19,6 +19,8 @@ Core Python package containing main functionality:
 - `symbols.py` - Public identifier extraction for SYMBOLS.md
 - `audit.py` - Measures orientation tax (reads vs. edits) from Claude Code transcripts
 - `decisions.py` - Mine architectural decisions from git history; show DECISIONS.md
+- `decide.py` - Decision recording and management; append to DECISIONS.md
+- `gotcha.py` - Non-obvious trap documentation; append to GOTCHAS.md
 - `ui.py` - Textual TUI dashboard for decisions, session efficiency, and context health
 - `utils.py` - Shared utility functions for context operations
 - `__init__.py` - Package initialization
@@ -63,9 +65,9 @@ Test suite for the package functionality
 - Claude integration without API key management via MCP server
 - Task slot namespacing for concurrent agent invocations
 - Extensible skill and template system
-- Commit-msg hook that suggests decision recording for architectural choices
+- **Architectural decision tracking**: Record and mine decisions from git history; auto-suggest via commit-msg hook
+- **Gotcha documentation**: Maintain repository-specific non-obvious traps and workarounds
 - **Orientation tax audit**: Measure reads-vs-edits efficiency from transcripts
-- **Decision mining**: Extract architectural decisions from git history
 - **TUI dashboard**: Visualize decisions, session metrics, and context health
 - Usage logging (task, tokens, timestamp) in JSONL format
 - Suggested decisions (from agents) logged to suggestions.jsonl
