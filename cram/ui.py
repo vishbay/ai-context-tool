@@ -332,7 +332,8 @@ def _build_app(root: str):  # noqa: ANN202
             pane = self.query_one('#decisions-pane', DecisionsPane)
             n = pane.pending_count()
             repo_name = os.path.basename(root)
-            self.title = f'cram-ai  •  {repo_name}{"  •  " + str(n) + " pending" if n else ""}'
+            pending = f'  •  {n} pending' if n else ''
+            self.sub_title = f'{repo_name}{pending}'
 
         def _auto_refresh(self) -> None:
             self.action_refresh()
