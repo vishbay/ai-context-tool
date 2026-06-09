@@ -8,8 +8,8 @@ cram prevents expensive exploratory file reads by pre-loading focused project, t
 decision, and gotcha context before coding starts. Instead of spending the first few exchanges
 re-discovering your codebase, your AI tool arrives oriented.
 
-Works with **Claude Code, Cursor, Windsurf, Zed, Codex, GitHub Copilot**, and any tool that
-reads a file on startup.
+Works with **Claude Code, Cursor, Windsurf, Zed, Codex, GitHub Copilot, Gemini CLI**, and any
+tool that reads a file on startup. Custom tool targets are supported via config.
 
 ---
 
@@ -18,6 +18,9 @@ reads a file on startup.
 ```bash
 # Standard — includes MCP server for Claude Code / Cursor / Windsurf / Zed
 pip install 'cram-ai[mcp]'
+
+# With TUI dashboard
+pip install 'cram-ai[mcp,tui]'
 
 # With macOS menu bar app
 pip install 'cram-ai[mcp,tray]'
@@ -42,6 +45,9 @@ cram init
 # 2. Fill in the manual files — this is where cram's real value lives
 vim .ai-context/DECISIONS.md   # architectural invariants, naming conventions
 vim .ai-context/GOTCHAS.md     # non-obvious traps that burned your team
+
+# Or mine your git history for decisions automatically:
+cram decisions --mine
 
 # 3. Commit so teammates get the context layer too
 git add .ai-context/ CLAUDE.md
@@ -78,7 +84,8 @@ your-repo/
 - Scaffolded by `cram init` — you fill them in over time
 - `DECISIONS.md`: "we use X", "never do Y", naming conventions, non-obvious invariants
 - `GOTCHAS.md`: silent side effects, middleware gaps, surprising nulls — things grep can't tell you
-- Append entries with `cram decide "..."` or `cram gotcha "..."`
+- Append entries with `cram decide "..."`, `cram gotcha "..."`, or mine git history with `cram decisions --mine`
+- Agents can propose decisions mid-session using the `propose_decision` MCP tool
 
 **Output protection by default:**
 Every file cram generates for file-based targets includes command output protection rules.
@@ -125,7 +132,7 @@ server once and the tool can call context tools directly.
 
 | Client | Config file |
 |---|---|
-| Claude Code | `.claude/settings.json` |
+| Claude Code | `.mcp.json` at repo root |
 | Cursor | `.cursor/mcp.json` or Cursor Settings → MCP |
 | Windsurf | Windsurf MCP settings |
 | Zed | Zed assistant settings → context servers |
@@ -140,8 +147,27 @@ server once and the tool can call context tools directly.
 | `get_symbols(query='')` | SYMBOLS.md — source files mapped to public identifiers, optionally filtered | Finding where a function is defined |
 | `get_decisions()` | DECISIONS.md — architectural commitments | Before making a design choice |
 | `get_gotchas()` | GOTCHAS.md — non-obvious traps and foot-guns | Before touching an unfamiliar area |
+| `propose_decision(text, reason='', alternatives='')` | Appends a `[PENDING]` entry to DECISIONS.md for owner review. Logs to `suggestions.jsonl` for `cram ui`. | When you make an architectural choice worth recording |
 | `add_file(path, identifiers='')` | Appends a file's excerpts to CURRENT_TASK.md | When a mid-task discovery needs new context |
 | `get_health()` | Deterministic markdown: staleness score (0–10), commits since last sync, per-file token counts vs soft budgets. Safe to cache. | Before trusting loaded context on a long-running branch |
+
+---
+
+## Agent write-back
+
+Agents can propose decisions directly to DECISIONS.md without leaving their session:
+
+```
+propose_decision(
+  text="use JWT over session cookies",
+  reason="stateless — scales horizontally without a session store",
+  alternatives="redis session store, cookie-based sessions"
+)
+```
+
+This appends a `[PENDING]` entry. The entry is surfaced in `cram ui` where you approve or
+discard it with a single keystroke. Nothing is written to the canonical record without owner
+review.
 
 ---
 
@@ -159,9 +185,9 @@ cram task "add pagination to the users endpoint" --target copilot
 cram task "add pagination to the users endpoint" --target cursor
 # → writes to .cursor/rules/cram-task.md
 
-# Windsurf (no-MCP fallback)
-cram task "add pagination to the users endpoint" --target windsurf
-# → writes to .windsurf/rules/cram-task.md
+# Gemini CLI
+cram task "refactor the auth module" --target gemini
+# → writes to GEMINI.md (marker-based, preserves your content outside cram's section)
 
 # All targets at once
 cram task "add pagination to the users endpoint" --target all
@@ -172,9 +198,106 @@ cram task "add pagination to the users endpoint" --target all
 | `cursor` | `.cursor/rules/cram-task.md` |
 | `windsurf` | `.windsurf/rules/cram-task.md` |
 | `copilot` | `.github/cram-task.md` |
-| `codex` | `AGENTS.md` (repo root — where Codex reads it) |
+| `codex` | `AGENTS.md` (repo root) |
+| `gemini` | `GEMINI.md` (repo root, marker-based upsert) |
 | `claude` | `CLAUDE.md` (escape hatch for Claude Code; prefer MCP) |
-| `all` | All of the above |
+| `all` | All detected targets |
+
+**Custom targets** — for tools with non-standard instruction files (e.g., an enterprise IDE with
+`AURA.md`), add a section to `.ai-context/config.toml`:
+
+```toml
+[targets.aura]
+file      = "AURA.md"
+indicator = "aura.config.json"   # optional: file/dir that signals tool is active
+upsert    = true                 # optional: use cram markers to preserve your content
+```
+
+Then `cram task "..." --target aura` works like any built-in target.
+
+**Enterprise gateways** — for internal model proxies that use SSO tokens instead of API keys,
+add to `~/.config/cram-ai/settings.json`:
+
+```json
+{
+  "proxy": {
+    "base_url": "https://gateway.corp/v1",
+    "headers": { "X-Corp-Token": "your-sso-token" }
+  }
+}
+```
+
+cram passes `base_url` as `api_base`, `headers` as `extra_headers`, and uses a dummy
+`api_key` so litellm doesn't abort. No API key needed.
+
+---
+
+## Decisions mining
+
+DECISIONS.md is the hardest file to keep current — it depends entirely on human discipline.
+`cram decisions --mine` automates the first draft:
+
+```bash
+cram decisions --mine          # scan last 90 days of git history
+cram decisions --mine --days 180
+```
+
+It scans git log for decision-shaped language, runs a cheap model to extract structured
+entries, then walks you through them one at a time (`git add -p` style):
+
+```
+── Draft 1/3 ──────────────────────────────────────
+  Decision: use JWT over session cookies
+  Reason:   reduces server-side state, scales horizontally
+  [a]ccept  [s]kip  [e]dit  [q]uit >
+```
+
+Accepted entries are appended to DECISIONS.md immediately.
+
+---
+
+## TUI dashboard
+
+`cram ui` opens a Textual terminal dashboard:
+
+```bash
+pip install 'cram-ai[tui]'
+cram ui
+```
+
+Three tabs:
+
+- **Decisions** (default) — pending agent proposals at top, accepted history below.
+  Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
+- **Sessions** — recent Claude Code sessions with reads, edits, and read-to-edit ratio.
+  Ratio > 5× is flagged — context isn't landing for those sessions.
+- **Health** — staleness score, per-file token budgets, active task slots.
+
+Auto-refreshes every 30 seconds. `r` forces a refresh, `q` quits.
+
+---
+
+## Orientation tax measurement
+
+`cram audit` measures how much of each session is spent on navigation vs. actual work:
+
+```bash
+cram audit           # last 30 days for this repo
+cram audit --days 7  # tighter window
+cram audit --all     # all projects
+```
+
+Output includes:
+
+```
+Avg reads before first edit:    8.2  ← primary metric
+Avg edits/session:              3.1
+Avg read-to-edit ratio:         2.6×  ~ normal
+
+Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
+```
+
+Run before and after adopting cram to measure the reduction.
 
 ---
 
@@ -190,6 +313,9 @@ cram task "fix the rate limiter" --target copilot
 # Log a decision while working
 cram decide "use cursor-based pagination, not offset — offset breaks under concurrent writes"
 
+# Mine git history for past decisions
+cram decisions --mine
+
 # Log a gotcha you just found
 cram gotcha "the users.email column is nullable in prod despite NOT NULL in schema.prisma"
 
@@ -198,6 +324,9 @@ cram continue
 
 # Check context freshness
 cram status
+
+# Review pending agent proposals + session efficiency
+cram ui
 ```
 
 After every commit the git post-commit hook runs `cram sync` automatically to refresh
@@ -224,6 +353,7 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 
 **Where health surfaces:**
 - `cram status` — per-file age table + health line with score, band, and commit count
+- `cram ui` → Health tab — staleness score + per-file token budgets + active task slots
 - Tray badge — shows band + score (`stale 6/10`) with band-appropriate color
 - `get_health()` MCP tool — deterministic markdown block the agent can call before trusting context
 - `get_context()` — prepends a one-line staleness warning when band is `stale` or `critical`
@@ -248,15 +378,18 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 | `cram init [path] [--team]` | One-time setup — scans repo, generates context files, installs git hook |
 | `cram mcp [--repo PATH]` | Start MCP server (stdio). Wire into your tool's settings once; clients launch it automatically. |
 | `cram task "..." [--target T]` | Run context pipeline, write CURRENT_TASK.md, optionally inject into tool's auto-loaded file |
+| `cram decisions [--mine] [--days N]` | Show DECISIONS.md, or mine git history for decision-shaped commits and review interactively |
 | `cram sync [path]` | Refresh ARCHITECTURE.md + SYMBOLS.md from current repo state |
 | `cram decide "..." [path]` | Append a dated architectural decision to DECISIONS.md |
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
-| `cram status [path]` | Show each context file with age, line count, and token budget status. Prints health line + `Output protection: active (6,000 byte cap) ✓` |
+| `cram status [path]` | Show each context file with age, line count, and token budget status |
+| `cram audit [--days N] [--all]` | Measure reads-before-edit and read-to-edit ratio from Claude Code transcripts |
+| `cram ui [path]` | TUI dashboard — pending decisions, session efficiency, context health (requires `cram-ai[tui]`) |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
 | `cram hook install\|uninstall` | Manage the git post-commit hook manually |
-| `cram menu [path]` | Launch macOS menu bar app |
+| `cram menu [path]` | Launch macOS menu bar app (requires `cram-ai[tray]`) |
 | `cram autostart on\|off` | Start menu bar app at login (macOS) |
 
 ---
@@ -287,8 +420,8 @@ export AICONTEXT_MODEL=ollama/mistral
 cram init
 ```
 
-Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies (install
-`cram-ai[multi-provider]`).
+Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies with
+`proxy.base_url` + `proxy.headers` (install `cram-ai[multi-provider]`).
 
 ---
 
@@ -329,6 +462,10 @@ The orientation phase is pure re-discovery overhead — the agent reads roughly 
 each session to figure out where to work. cram replaces that with one `get_context()` call
 returning ~1–2K tokens of targeted excerpts.
 
+You can measure your actual overhead with `cram audit`. The read-to-edit ratio — reads before
+first edit divided by total edits — tells you how much of each session is navigation vs. work.
+Ratio > 5× means context isn't landing.
+
 **What cram removes — and what the tray estimates:**
 
 cram eliminates the cold-start orientation overhead per session. It does **not** replace
@@ -345,25 +482,6 @@ Default assumptions (overridable via env):
 **Savings scale with repo size.** A small repo like cram-ai itself (50 files, ~80k tokens)
 yields cents/day — correct and honest. A mid-size repo (200 files, ~500k tokens) yields
 roughly ~$0.50–1.50/day depending on session frequency and model.
-
-**cram tray shows live estimates** based on your actual repo. Use the model selector to
-see estimates for your model:
-
-| Model | Base input price |
-|---|---|
-| Haiku 4.5 | $1.00 / MTok |
-| Sonnet 4.6 | $3.00 / MTok |
-| Opus 4 | $5.00 / MTok |
-
-| Metric | What it shows |
-|---|---|
-| Context reduction | How much smaller the cram frozen layer is vs the full repo |
-| Orientation / day | ~-prefixed est. cost of cold-start orientation per day without cram |
-| Cram layer / day | ~-prefixed est. cost of the frozen cram layer (1 write + N−1 reads/session) |
-| Saved / day | The difference — orientation overhead avoided; low-precision estimate |
-
-The tray also shows **actual usage** (writes, reads, est. spend) from Claude Code transcripts
-when available, so modeled numbers aren't the only story.
 
 Run `cram benchmark` for a full breakdown across all three delivery strategies and all model tiers.
 
