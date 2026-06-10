@@ -151,15 +151,6 @@ def main() -> None:
     except Exception as exc:
         _row(None, f'model discovery error: {exc}')
 
-    # ── tray deps (optional) ──────────────────────────────────────
-    print()
-    try:
-        import pystray, webview  # noqa: F401
-        _row(True, 'tray deps', 'pystray + webview')
-    except ImportError:
-        _row(None, 'tray app not installed',
-             "optional — pip install 'cram-ai[tray]' for the menu bar app")
-
     # ── summary ───────────────────────────────────────────────────
     print()
     if errors == 0:

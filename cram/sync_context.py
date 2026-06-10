@@ -18,7 +18,7 @@ SESSION_ENDED_TEMPLATE = """\
 # Current Task
 
 ## Task
-<!-- Session ended on commit. Run `cram task "..."` or use the tray to begin a new task. -->
+<!-- Session ended on commit. Run `cram task "..."` to begin a new task. -->
 
 ## Relevant Files
 <!-- Populated by `cram task "..."` -->
@@ -108,7 +108,7 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
     for path in written:
         print(f"Task context reset in {os.path.relpath(path, root)} (your instructions are untouched).")
     clear_session(root)
-    print("Ready for next task — run `cram task \"...\"` or use the tray.")
+    print("Ready for next task — run `cram task \"...\"`.")
 
 
 def sync(root: str = '.') -> None:

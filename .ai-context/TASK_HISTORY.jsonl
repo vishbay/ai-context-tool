@@ -1,0 +1,5 @@
+{"ts": "2026-06-09T23:38:52.585346+00:00", "task": "Test cram tui history."}
+{"ts": "2026-06-09T23:57:37.402352+00:00", "task": "<!-- Session ended on commit. Run `cram task \"...\"` or use the tray to begin a new task. -->"}
+{"ts": "2026-06-10T00:14:19.321459+00:00", "task": "test tui history - second pass.", "slug": "test-tui-history-second-pass"}
+{"ts": "2026-06-10T00:19:30.595737+00:00", "task": "test tui history - second pass."}
+{"ts": "2026-06-10T02:45:31.495790+00:00", "task": "Review.", "slug": "review"}

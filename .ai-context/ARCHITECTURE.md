@@ -15,6 +15,7 @@ Core Python package containing main functionality:
 - `status.py` - Shows .ai-context/ file freshness and repo sync state
 - `hooks.py` - Git post-commit and commit-msg hook installer for automated sync and decision recording
 - `mcp_server.py` - MCP server for Claude Code integration with task slot namespacing, usage logging, and decision proposals
+- `session.py` - Session state management: task archiving, slot tracking, grace period handling
 - `targets.py` - Target-specific output generation with byte-cap command protection rules
 - `symbols.py` - Public identifier extraction for SYMBOLS.md
 - `audit.py` - Measures orientation tax (reads vs. edits) from Claude Code transcripts
@@ -66,7 +67,13 @@ Test suite for the package functionality
 - **Architectural decision tracking**: Record and mine decisions from git history
 - **Gotcha documentation**: Maintain repository-specific non-obvious traps and workarounds
 - **Orientation tax audit**: Measure reads-vs-edits efficiency from transcripts
-- **Interactive TUI dashboard**: Visualize decisions, sessions, health, task history; approve/delete pending changes; execute cram commands with live output
+- **Interactive TUI dashboard** (5 tabs):
+  - **Decisions**: Pending agent proposals, accept/delete history
+  - **Sessions**: Claude Code sessions with reads, edits, read-to-edit ratio, and active task per session
+  - **Health**: Staleness score, commits since last sync, per-file token budgets
+  - **History**: Recent `cram task` invocations; active session task shown in green
+  - **Actions**: Execute `cram sync`, `cram task`, `cram benchmark`, `cram doctor` with live output
+  - Auto-refreshes every 30s; tabs refresh on switch
 - Usage logging (task, tokens, timestamp) in JSONL format
 - Task history archiving (per-session task invocations with timestamps)
 - Suggested decisions (from agents) logged to suggestions.jsonl
@@ -77,7 +84,7 @@ Test suite for the package functionality
 CLI commands dispatched through unified `cram` entry point:
 - `cram init [path]` - Bootstrap project configuration and install git hooks
 - `cram task "<description>"` - Populate CURRENT_TASK.md before coding session
-- `cram sync [path]` - Update ARCHITECTURE.md and SYMBOLS.md after a commit
+- `cram sync [path]` - Update ARCHITECTURE.md and SYMBOLS.md after a commit. If session grace period expired, archives current task to TASK_HISTORY.jsonl and resets task context in target files
 - `cram status [path]` - Show .ai-context/ freshness and output protection status
 - `cram decide "<statement>"` - Append architectural decision to DECISIONS.md
 - `cram decisions [--mine] [--days N]` - Show or mine decisions from git history
@@ -109,6 +116,10 @@ CLI commands dispatched through unified `cram` entry point:
 ## Concurrency Model
 
 cram is designed for **one developer, one repo checkout**. Task slot namespacing (`.ai-context/tasks/`) protects against concurrent MCP calls within a single server process, allowing multiple agents to invoke `get_context()` in parallel without collision. This is not a collaboration feature—each developer maintains independent context files in their local checkout.
+
+## Staleness Detection
+
+The post-commit hook writes ARCHITECTURE.md to disk but does not commit it. The health check detects this correctly: if the file has uncommitted changes (rewritten by `cram sync` after the last commit), staleness score is reported as 0—not stale.
 
 ## Dependencies
 
