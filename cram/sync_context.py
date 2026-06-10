@@ -103,9 +103,9 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
 
     written = _targets.write_to_all_detected(root, SESSION_ENDED_TEMPLATE)
     for path in written:
-        print(f"Session ended — cleared {os.path.relpath(path, root)}")
+        print(f"Task context reset in {os.path.relpath(path, root)} (your instructions are untouched).")
     clear_session(root)
-    print("Set a new task with `cram task \"...\"` or via the tray.")
+    print("Ready for next task — run `cram task \"...\"` or use the tray.")
 
 
 def sync(root: str = '.') -> None:
