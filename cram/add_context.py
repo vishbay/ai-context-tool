@@ -35,12 +35,13 @@ def add_files(
     file_specs: list[str],
     replace: bool = False,
     target: str | None = None,
+    task_path_override: str | None = None,
 ) -> bool:
     from cram.find_context import _extract_excerpt, _resolve_path
     from cram.utils import find_git_root as _find_git_root
     from cram import targets as _targets
 
-    task_path = context_path('.', 'CURRENT_TASK.md', warn=True)
+    task_path = task_path_override or context_path('.', 'CURRENT_TASK.md', warn=True)
     if not os.path.exists(task_path):
         print('Error: no active session. Run `cram task "..."` first.', file=sys.stderr)
         return False

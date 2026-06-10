@@ -259,42 +259,12 @@ def find_relevant_files(
 
 def _archive_current_task_to_history() -> None:
     """Archive the current CURRENT_TASK.md entry to TASK_HISTORY.jsonl before it's replaced."""
-    import json
-    import datetime
-    try:
-        current_path = context_path('.', 'CURRENT_TASK.md', warn=False)
-        if not current_path or not os.path.exists(current_path):
-            return
-        content = open(current_path, errors='ignore').read().strip()
-        if not content or '<!-- Session ended' in content:
-            return
-        task = ''
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if s == '## Task':
-                for j in range(i + 1, len(lines)):
-                    candidate = lines[j].strip()
-                    if candidate and not candidate.startswith('#'):
-                        task = candidate
-                        break
-                break
-            if s.startswith('# Task:'):
-                task = s[len('# Task:'):].strip()
-                break
-        if not task:
-            return
-        history_path = context_path('.', 'TASK_HISTORY.jsonl', warn=False)
-        if not history_path:
-            return
-        entry = {
-            'ts':   datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'task': task,
-        }
-        with open(history_path, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-    except Exception:
-        pass
+    from cram.session import archive_task as _archive_task
+    current_path = context_path('.', 'CURRENT_TASK.md', warn=False)
+    if not current_path:
+        return
+    root = _find_git_root(os.getcwd())
+    _archive_task(root, current_path)
 
 
 # ── context assembly ──────────────────────────────────────────────

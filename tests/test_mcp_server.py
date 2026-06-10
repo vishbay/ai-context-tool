@@ -412,3 +412,120 @@ class TestProposeDecision:
 
         content = (repo / CONTEXT_DIR / 'DECISIONS.md').read_text()
         assert 'sessions, cookies' in content
+
+
+# ---------------------------------------------------------------------------
+# A1: Slot coherence — reload, add_file, and archive work against the slot
+# ---------------------------------------------------------------------------
+
+class TestSlotCoherence:
+    def test_get_context_no_arg_returns_slot_content(self, repo, monkeypatch):
+        """get_context() with no arg returns slot content written by get_context(task)."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            result1 = srv.get_context('fix the rate limiter')
+
+        # Now call with no arg — should return the same slot content
+        result2 = srv.get_context()
+        assert 'fix the rate limiter' in result2
+        assert result2.strip() == result1.strip() or 'fix the rate limiter' in result2
+
+    def test_add_file_appends_to_slot_not_current_task(self, repo, monkeypatch):
+        """add_file() appends to the active slot, not CURRENT_TASK.md."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+        # Write a helper file to add
+        (repo / 'utils.py').write_text('def parse(): pass\ndef format(): pass\n')
+
+        entries = [('main.py', ['main'])]
+        with patch('cram.find_context.find_relevant_files', return_value=entries):
+            srv.get_context('add logging support')
+
+        result = srv.add_file('utils.py')
+        assert 'utils.py' in result
+
+        # The slot file should contain utils.py
+        from cram.session import get_last_slot
+        slug = get_last_slot(str(repo))
+        assert slug is not None
+        slot_path = repo / CONTEXT_DIR / 'tasks' / f'{slug}.md'
+        assert slot_path.exists()
+        assert 'utils.py' in slot_path.read_text()
+
+    def test_two_get_context_calls_archive_first_task(self, repo, monkeypatch):
+        """After two get_context(task) calls, the first task appears in TASK_HISTORY.jsonl."""
+        import json as _json
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(repo))
+        monkeypatch.chdir(repo)
+
+        entries_a = [('main.py', ['main'])]
+        entries_b = [('main.py', ['helper'])]
+        with patch('cram.find_context.find_relevant_files', side_effect=[entries_a, entries_b]):
+            srv.get_context('task alpha')
+            srv.get_context('task beta')
+
+        history_path = repo / CONTEXT_DIR / 'TASK_HISTORY.jsonl'
+        assert history_path.exists()
+        lines = [l for l in history_path.read_text().strip().splitlines() if l]
+        assert len(lines) >= 1
+        first_entry = _json.loads(lines[0])
+        assert first_entry['task'] == 'task alpha'
+        assert 'slug' in first_entry
+        assert 'ts' in first_entry
+
+
+# ---------------------------------------------------------------------------
+# A4: Canonical archive_task from session.py
+# ---------------------------------------------------------------------------
+
+class TestArchiveTask:
+    def test_archive_writes_jsonl_entry(self, tmp_path):
+        """archive_task writes a well-formed JSONL entry with ts/task/slug."""
+        import json as _json
+        from cram.session import archive_task
+
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        source = tmp_path / 'task.md'
+        source.write_text('# Current Task\n\n## Task\nfix the parser\n\n## Relevant Files\n')
+
+        archive_task(str(tmp_path), str(source))
+
+        history = ctx / 'TASK_HISTORY.jsonl'
+        assert history.exists()
+        entry = _json.loads(history.read_text().strip())
+        assert entry['task'] == 'fix the parser'
+        assert 'slug' in entry
+        assert 'ts' in entry
+        assert entry['slug'] == 'fix-the-parser'
+
+    def test_archive_skips_session_ended_placeholder(self, tmp_path):
+        """archive_task skips files containing the session-ended marker."""
+        from cram.session import archive_task
+
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        source = tmp_path / 'task.md'
+        source.write_text('# Current Task\n\n## Task\n<!-- Session ended on commit. -->\n')
+
+        archive_task(str(tmp_path), str(source))
+
+        history = ctx / 'TASK_HISTORY.jsonl'
+        assert not history.exists()
+
+    def test_archive_skips_missing_file(self, tmp_path):
+        """archive_task silently does nothing if source_path doesn't exist."""
+        from cram.session import archive_task
+
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+
+        archive_task(str(tmp_path), str(tmp_path / 'nonexistent.md'))
+        # No TASK_HISTORY.jsonl should be created
+        assert not (ctx / 'TASK_HISTORY.jsonl').exists()
