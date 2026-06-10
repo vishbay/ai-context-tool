@@ -71,19 +71,20 @@ def _commits_since_context_update(root: str) -> int | None:
     rel = os.path.join(rel_dir, 'ARCHITECTURE.md')
     arch_path = os.path.join(root, rel)
     try:
-        last_commit_ts = int(subprocess.check_output(
-            ['git', 'log', '-1', '--format=%ct'],
-            cwd=root, stderr=subprocess.DEVNULL,
-        ).decode().strip() or '0')
-        arch_mtime = os.path.getmtime(arch_path) if os.path.exists(arch_path) else 0
-        if arch_mtime >= last_commit_ts:
-            return 0
         sha = subprocess.check_output(
             ['git', 'log', '-1', '--format=%H', '--', rel],
             cwd=root, stderr=subprocess.DEVNULL,
         ).decode().strip()
         if not sha:
             return None
+        # cram sync writes ARCHITECTURE.md but doesn't commit it. If the
+        # working-tree file differs from HEAD it was already updated this sync.
+        dirty = subprocess.run(
+            ['git', 'diff', '--quiet', 'HEAD', '--', rel],
+            cwd=root, stderr=subprocess.DEVNULL,
+        ).returncode != 0
+        if dirty:
+            return 0
         count = subprocess.check_output(
             ['git', 'rev-list', '--count', f'{sha}..HEAD'],
             cwd=root, stderr=subprocess.DEVNULL,
