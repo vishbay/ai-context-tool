@@ -36,6 +36,7 @@ def add_files(
     replace: bool = False,
     target: str | None = None,
     task_path_override: str | None = None,
+    root: str | None = None,
 ) -> bool:
     from cram.find_context import _extract_excerpt, _resolve_path
     from cram.utils import find_git_root as _find_git_root
@@ -45,6 +46,9 @@ def add_files(
     if not os.path.exists(task_path):
         print('Error: no active session. Run `cram task "..."` first.', file=sys.stderr)
         return False
+
+    # Resolve the root we use for file lookups (don't chdir)
+    effective_root = root or '.'
 
     with open(task_path) as f:
         current = f.read()
@@ -64,9 +68,10 @@ def add_files(
             fpath = spec.strip()
             ids   = keywords  # use current task's keywords as focus hints
 
-        resolved = _resolve_path(fpath)
+        resolved = _resolve_path(fpath, effective_root)
 
-        if not os.path.exists(resolved):
+        abs_resolved = resolved if os.path.isabs(resolved) else os.path.join(effective_root, resolved)
+        if not os.path.exists(abs_resolved):
             print(f'  ✗  {fpath}  — not found')
             continue
 
@@ -75,7 +80,7 @@ def add_files(
             continue
 
         ext     = os.path.splitext(resolved)[1].lstrip('.')
-        excerpt = _extract_excerpt(resolved, ids)
+        excerpt = _extract_excerpt(resolved, ids, root=effective_root)
         tok     = len(excerpt) // 4
 
         if resolved in existing:
@@ -96,16 +101,16 @@ def add_files(
     total = len(current) // 4
     print(f'\n  Total context: ~{total:,} tokens')
 
-    root = _find_git_root(os.getcwd())
-    eff_target = target if target is not None else _targets.load_default_target(root)
+    eff_root = root or _find_git_root(os.getcwd())
+    eff_target = target if target is not None else _targets.load_default_target(eff_root)
     if eff_target:
         arch_path = context_path('.', 'ARCHITECTURE.md', warn=True)
         arch = open(arch_path).read() if os.path.exists(arch_path) else ''
         if eff_target == 'all':
-            for p in _targets.write_to_all_detected(root, current, arch):
+            for p in _targets.write_to_all_detected(eff_root, current, arch):
                 print(f'  → {os.path.relpath(p)}')
         else:
-            path = _targets.write_to_target(root, eff_target, current, arch)
+            path = _targets.write_to_target(eff_root, eff_target, current, arch)
             print(f'  → {os.path.relpath(path)}')
 
     return True
