@@ -290,6 +290,75 @@ class TestContextBloat:
         assert 'big_result_bytes' in data
 
 
+class TestRetryLoops:
+    """Bucket-3 metrics: failed tool calls and same-file edit churn."""
+
+    def _write_raw(self, path, messages):
+        with open(path, 'w') as f:
+            for msg in messages:
+                f.write(json.dumps(msg) + '\n')
+
+    def test_error_results_counted(self, tmp_path):
+        path = str(tmp_path / 's.jsonl')
+        self._write_raw(path, [
+            {'type': 'tool_result', 'content': 'boom', 'is_error': True},
+            {'type': 'tool_result', 'content': 'fine'},
+            {'type': 'tool_result', 'content': 'fine', 'is_error': False},
+            {'type': 'tool_result', 'content': 'boom again', 'is_error': True},
+        ])
+        r = _analyze_transcript(path)
+        assert r['error_results'] == 2
+
+    def test_no_errors_yields_zero(self, tmp_path):
+        path = _make_transcript([('Read', {}), ('Edit', {})], tmp_path)
+        r = _analyze_transcript(path)
+        assert r['error_results'] == 0
+        assert r['edit_churn'] == 0
+
+    def test_edit_churn_counts_repeat_edits(self, tmp_path):
+        # 3 edits to a.py (churn 2) + 1 to b.py (churn 0) → 2
+        path = _make_transcript([
+            ('Edit', {'file_path': 'a.py'}),
+            ('Edit', {'file_path': 'a.py'}),
+            ('Write', {'file_path': 'a.py'}),
+            ('Edit', {'file_path': 'b.py'}),
+        ], tmp_path)
+        r = _analyze_transcript(path)
+        assert r['edit_churn'] == 2
+
+    def test_edits_without_file_path_ignored(self, tmp_path):
+        path = _make_transcript([
+            ('Edit', {}),
+            ('Edit', {}),
+            ('Write', {'command': 'no path here'}),
+        ], tmp_path)
+        r = _analyze_transcript(path)
+        assert r['edits'] == 3
+        assert r['edit_churn'] == 0
+
+    def test_collect_audit_aggregates_retry_loops(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+        td = tmp_path / 'transcripts' / 'proj'
+        td.mkdir(parents=True)
+        # Session 0: 2 failures + churn 1; session 1: clean.
+        self._write_raw(str(td / 's0.jsonl'), [
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'a.py'}},
+            {'type': 'tool_result', 'content': 'boom', 'is_error': True},
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'a.py'}},
+            {'type': 'tool_result', 'content': 'boom', 'is_error': True},
+        ])
+        self._write_raw(str(td / 's1.jsonl'), [
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'b.py'}},
+            {'type': 'tool_result', 'content': 'fine'},
+        ])
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda repo_root: str(td))
+        data = collect_audit(str(tmp_path), days=365)
+        assert abs(data['avg_error_results'] - 1.0) < 0.01
+        assert abs(data['avg_edit_churn'] - 0.5) < 0.01
+        assert data['sessions_with_errors'] == 1
+
+
 class TestFindAllToolUse:
     def test_finds_top_level(self):
         obj = {'type': 'tool_use', 'name': 'Read', 'input': {}}
@@ -339,6 +408,21 @@ class TestAuditConstants:
             assert _audit_mod.AUDIT_TOK_PER_FILE == 1000
             assert abs(_audit_mod.AUDIT_BASE_PRICE - 0.000005) < 1e-12
         finally:
+            importlib.reload(_audit_mod)  # restore defaults
+
+    def test_provider_wiring_local_zeroes_prices(self, monkeypatch):
+        """CRAM_PROVIDER=local zeroes AUDIT_BASE_PRICE and CACHE_READ_MULT on reload."""
+        monkeypatch.setenv('CRAM_PROVIDER', 'local')
+        monkeypatch.delenv('CRAM_AUDIT_BASE_PRICE', raising=False)
+        import importlib
+        import cram.audit as _audit_mod
+        importlib.reload(_audit_mod)
+        try:
+            assert _audit_mod.AUDIT_PROVIDER == 'local'
+            assert _audit_mod.AUDIT_BASE_PRICE == 0.0
+            assert _audit_mod.CACHE_READ_MULT == 0.0
+        finally:
+            monkeypatch.delenv('CRAM_PROVIDER', raising=False)
             importlib.reload(_audit_mod)  # restore defaults
 
     def test_run_audit_prints_modelled_caveat(self, tmp_path, monkeypatch):

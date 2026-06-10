@@ -46,9 +46,11 @@ the pivot stands on. **Do this before building more.**
   oversized tool results, redundant re-reads (bucket 2 + 4), cache-engagement ratio
   (bucket 5)~~ **done** — surfaced in CLI report, `--json`, and the TUI Audit tab.
 - ~~Add `--json` output so other surfaces consume data, not text~~ **done**.
-- Remaining: retry-loop detection (bucket 3), per-provider cost model table in
-  `cost_model.py` (Anthropic / OpenAI / Gemini / local) so dollar attribution is
-  pluggable, not hardcoded to Sonnet pricing.
+- ~~Retry-loop detection (bucket 3): failed tool calls (`is_error` results) +
+  same-file edit churn~~ **done** — CLI report, `--json`, TUI.
+- ~~Per-provider cost model table (Anthropic / OpenAI / Gemini / local) in
+  `cost_model.py`~~ **done** — `CRAM_PROVIDER` selects, field-level env overrides,
+  audit dollar attribution wired through it. **P1 complete.**
 
 ### P2 — Audit-first `cram ui`
 - New **Audit** tab as the default landing tab: headline metrics (reads-before-first-edit,

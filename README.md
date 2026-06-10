@@ -321,6 +321,15 @@ context re-read per request, the share of read-cost in the final third of turns
 tool results (a big result entering at turn k is re-read by every later turn), and
 redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20000).
 
+**Retry loops** are reported when present: failed tool calls per session (`is_error`
+tool results — each usually means a retry follows) and same-file re-edits per session
+(a couple is normal; sustained churn means the agent is thrashing).
+
+Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
+(default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
+are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,
+`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers.
+
 Run before and after adopting cram to measure the reduction.
 
 ---
@@ -485,6 +494,12 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 | `CRAM_BUDGET_DECISIONS` | `600` | Soft token budget for DECISIONS.md |
 | `CRAM_BUDGET_GOTCHAS` | `400` | Soft token budget for GOTCHAS.md |
 | `CRAM_BUDGET_TASK` | `800` | Soft token budget for CURRENT_TASK.md |
+| `CRAM_PROVIDER` | `anthropic` | Pricing table for audit dollar attribution: `anthropic` / `openai` / `gemini` / `local` |
+| `CRAM_PRICE_INPUT_PER_MTOK` | per provider | Override base input price ($/1M tokens) for audit cost estimates |
+| `CRAM_CACHE_WRITE_MULT` | per provider | Override cache-write multiplier (1.25 on Anthropic) |
+| `CRAM_CACHE_READ_MULT` | per provider | Override cache-read multiplier (0.10 on Anthropic) |
+| `CRAM_AUDIT_TOK_PER_FILE` | `2500` | Assumed tokens per orientation file read in `cram audit` cost modeling |
+| `CRAM_AUDIT_BIG_RESULT_BYTES` | `20000` | Serialized size above which a tool result counts as oversized in `cram audit` |
 
 ---
 

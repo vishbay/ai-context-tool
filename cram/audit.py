@@ -18,15 +18,23 @@ CONTEXT_DIR = '.ai-context'
 # Rough average tokens per file excerpt read during orientation.
 # Override with: CRAM_AUDIT_TOK_PER_FILE=2500
 AUDIT_TOK_PER_FILE: int = int(os.environ.get('CRAM_AUDIT_TOK_PER_FILE', '2500'))
-# Sonnet base input price per token (USD).
-# Override with: CRAM_AUDIT_BASE_PRICE=0.000003
-AUDIT_BASE_PRICE: float = float(os.environ.get('CRAM_AUDIT_BASE_PRICE', str(3.0 / 1_000_000)))
+# Dollar attribution is provider-pluggable: select with CRAM_PROVIDER
+# (anthropic | openai | gemini | local), override individual fields via
+# CRAM_PRICE_INPUT_PER_MTOK / CRAM_CACHE_WRITE_MULT / CRAM_CACHE_READ_MULT.
+from cram.cost_model import get_provider_pricing, resolve_provider
+
+AUDIT_PROVIDER: str = resolve_provider()
+_PRICING = get_provider_pricing(AUDIT_PROVIDER)
+# Base input price per token (USD). CRAM_AUDIT_BASE_PRICE wins over the
+# provider table for backward compatibility.
+AUDIT_BASE_PRICE: float = float(os.environ.get(
+    'CRAM_AUDIT_BASE_PRICE', str(_PRICING['input_per_mtok'] / 1_000_000)))
 # A tool result above this serialized size counts as oversized — it gets
 # carried (re-read) by every subsequent request in the session.
 # Override with: CRAM_AUDIT_BIG_RESULT_BYTES=20000
 BIG_RESULT_BYTES: int = int(os.environ.get('CRAM_AUDIT_BIG_RESULT_BYTES', '20000'))
-# Cache reads are billed at 0.1x the base input price.
-CACHE_READ_MULT = 0.1
+# Cache-read multiplier vs base input price (0.1x on Anthropic).
+CACHE_READ_MULT: float = _PRICING['cache_read_mult']
 
 
 def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
@@ -97,6 +105,10 @@ def _analyze_transcript(path: str) -> dict | None:
     big_result_positions: list[tuple[int, int]] = []  # (requests seen so far, est. tokens)
     read_counts: dict[str, int] = {}                  # file_path → Read count
 
+    # Bucket-3 (retry loop) signals
+    error_results = 0                                 # failed tool calls
+    edit_counts: dict[str, int] = {}                  # file_path → Edit/Write count
+
     try:
         with open(path, errors='ignore') as f:
             for line in f:
@@ -128,6 +140,10 @@ def _analyze_transcript(path: str) -> dict | None:
                         edits += 1
                         if not first_edit_seen:
                             first_edit_seen = True
+                        if isinstance(inp, dict):
+                            fpath = inp.get('file_path', '')
+                            if fpath:
+                                edit_counts[fpath] = edit_counts.get(fpath, 0) + 1
 
                 for u in _find_usage(msg):
                     cache_writes += u.get('cache_creation_input_tokens', 0)
@@ -137,6 +153,8 @@ def _analyze_transcript(path: str) -> dict | None:
                     )
 
                 for tr in _find_tool_results(msg):
+                    if tr.get('is_error'):
+                        error_results += 1
                     try:
                         size = len(json.dumps(tr.get('content', '')))
                     except Exception:
@@ -178,6 +196,8 @@ def _analyze_transcript(path: str) -> dict | None:
         'big_results':             big_results,
         'carried_read_tokens':     carried_read_tokens,
         'redundant_reads':         sum(c - 1 for c in read_counts.values() if c > 1),
+        'error_results':           error_results,
+        'edit_churn':              sum(c - 1 for c in edit_counts.values() if c > 1),
         'mtime':                   os.path.getmtime(path),
     }
 
@@ -281,6 +301,11 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
     )
     avg_redundant_reads = sum(s['redundant_reads'] for s in all_sessions) / total
 
+    # Bucket 3: retry loops — failed tool calls and same-file edit churn
+    avg_error_results   = sum(s['error_results'] for s in all_sessions) / total
+    avg_edit_churn      = sum(s['edit_churn'] for s in all_sessions) / total
+    sessions_with_errors = sum(1 for s in all_sessions if s['error_results'] > 0)
+
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
     # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
     orient_tok_per_session  = avg_rbe * AUDIT_TOK_PER_FILE
@@ -317,11 +342,15 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
         'sessions_with_big_results': sessions_with_big_results,
         'carried_cost_per_session':  carried_cost_per_session,
         'avg_redundant_reads':       avg_redundant_reads,
+        'avg_error_results':         avg_error_results,
+        'avg_edit_churn':            avg_edit_churn,
+        'sessions_with_errors':      sessions_with_errors,
         'big_result_bytes':          BIG_RESULT_BYTES,
         'orient_tokens_per_session': orient_tok_per_session,
         'orient_cost_per_session':   orient_cost_per_session,
         'sessions_per_month':        sessions_per_month,
         'monthly_orient_cost':       monthly_orient_cost,
+        'provider':                  AUDIT_PROVIDER,
         'projects':                  project_summaries,
         'weekly':                    weekly,
         'recent':                    recent,
@@ -385,9 +414,17 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
                   f"  (oversized results re-read every turn)")
         if data['avg_redundant_reads'] >= 0.5:
             print(f"    Redundant same-file reads:    {data['avg_redundant_reads']:.1f}/session")
+
+    if data['avg_error_results'] > 0 or data['avg_edit_churn'] > 0:
+        print()
+        print(f"  Retry loops:")
+        print(f"    Failed tool calls/session:    {data['avg_error_results']:.1f}"
+              f"  ({data['sessions_with_errors']}/{total} sessions had failures)")
+        print(f"    Same-file re-edits/session:   {data['avg_edit_churn']:.1f}")
     print()
     print(f"  Est. orientation tokens/session: ~{data['orient_tokens_per_session']:,.0f}")
-    print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  (Sonnet, base input)")
+    print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  "
+          f"({data['provider']} pricing, base input)")
     print(f"  Est. monthly orientation tax:    ~${data['monthly_orient_cost']:.2f}  "
           f"({data['sessions_per_month']:.0f} sessions/month)")
     print(f"  Note: cost is modelled from reads_before_edit ({AUDIT_TOK_PER_FILE:,} tok/file assumed); "

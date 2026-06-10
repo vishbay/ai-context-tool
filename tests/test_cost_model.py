@@ -97,3 +97,89 @@ class TestBudgetStatus:
         assert budget_status('GOTCHAS.md', 201) == 'over'
         assert budget_status('GOTCHAS.md', 160) == 'near'
         assert budget_status('GOTCHAS.md', 50) == 'ok'
+
+
+# ---------------------------------------------------------------------------
+# get_provider_pricing
+# ---------------------------------------------------------------------------
+
+class TestProviderPricing:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        # Isolate from any pricing env vars set in the developer's shell.
+        for var in ('CRAM_PROVIDER', 'CRAM_PRICE_INPUT_PER_MTOK',
+                    'CRAM_CACHE_WRITE_MULT', 'CRAM_CACHE_READ_MULT'):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_known_providers_return_table_values(self):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        for name, expected in PROVIDER_PRICING.items():
+            assert get_provider_pricing(name) == expected
+
+    def test_default_is_anthropic(self):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        assert get_provider_pricing() == PROVIDER_PRICING['anthropic']
+
+    def test_env_selects_provider(self, monkeypatch):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        monkeypatch.setenv('CRAM_PROVIDER', 'gemini')
+        assert get_provider_pricing() == PROVIDER_PRICING['gemini']
+
+    def test_unknown_provider_falls_back_to_anthropic(self):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        assert get_provider_pricing('antropic-typo') == PROVIDER_PRICING['anthropic']
+
+    def test_case_insensitive_lookup(self):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        assert get_provider_pricing('Anthropic') == PROVIDER_PRICING['anthropic']
+        assert get_provider_pricing('OPENAI') == PROVIDER_PRICING['openai']
+
+    def test_env_field_override_wins(self, monkeypatch):
+        from cram.cost_model import get_provider_pricing
+        monkeypatch.setenv('CRAM_PRICE_INPUT_PER_MTOK', '5.0')
+        p = get_provider_pricing('anthropic')
+        assert p['input_per_mtok'] == 5.0
+        # Other fields untouched.
+        assert p['cache_write_mult'] == 1.25
+
+    def test_unparseable_env_override_ignored(self, monkeypatch):
+        from cram.cost_model import get_provider_pricing
+        monkeypatch.setenv('CRAM_PRICE_INPUT_PER_MTOK', 'not-a-number')
+        assert get_provider_pricing('anthropic')['input_per_mtok'] == 3.00
+
+    def test_local_is_all_zeros(self):
+        from cram.cost_model import get_provider_pricing
+        assert get_provider_pricing('local') == {
+            'input_per_mtok': 0.00, 'cache_write_mult': 0.00, 'cache_read_mult': 0.00,
+        }
+
+    def test_returns_fresh_dict_each_call(self):
+        from cram.cost_model import PROVIDER_PRICING, get_provider_pricing
+        p = get_provider_pricing('anthropic')
+        p['input_per_mtok'] = 999.0
+        assert PROVIDER_PRICING['anthropic']['input_per_mtok'] == 3.00
+        assert get_provider_pricing('anthropic')['input_per_mtok'] == 3.00
+
+    def test_legacy_mult_constants_unchanged(self):
+        from cram.cost_model import READ_MULT, WRITE_MULT
+        assert WRITE_MULT == 1.25
+        assert READ_MULT == 0.10
+
+
+class TestResolveProvider:
+    def test_argument_wins(self, monkeypatch):
+        from cram.cost_model import resolve_provider
+        monkeypatch.setenv('CRAM_PROVIDER', 'openai')
+        assert resolve_provider('gemini') == 'gemini'
+
+    def test_env_then_default(self, monkeypatch):
+        from cram.cost_model import resolve_provider
+        monkeypatch.setenv('CRAM_PROVIDER', 'openai')
+        assert resolve_provider() == 'openai'
+        monkeypatch.delenv('CRAM_PROVIDER')
+        assert resolve_provider() == 'anthropic'
+
+    def test_unknown_falls_back(self):
+        from cram.cost_model import resolve_provider
+        assert resolve_provider('not-a-provider') == 'anthropic'
+        assert resolve_provider('  Gemini ') == 'gemini'

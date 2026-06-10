@@ -355,6 +355,23 @@ def _build_app(root: str):  # noqa: ANN202
                         f'  Redundant re-reads         {data["avg_redundant_reads"]:.1f}/session'
                     )
 
+            if data['avg_error_results'] > 0 or data['avg_edit_churn'] > 0:
+                lines += ['', '[b]Retry loops[/b]']
+                err = data['avg_error_results']
+                if err > 8:
+                    err_str = f'[red]{err:.1f}[/red]'
+                elif err > 3:
+                    err_str = f'[yellow]{err:.1f}[/yellow]'
+                else:
+                    err_str = f'{err:.1f}'
+                lines.append(
+                    f'  Failed tool calls/session  {err_str}'
+                    f'  [dim]({data["sessions_with_errors"]}/{total} sessions had failures)[/dim]'
+                )
+                lines.append(
+                    f'  Same-file re-edits/session {data["avg_edit_churn"]:.1f}'
+                )
+
             if data['weekly']:
                 lines += ['', '[b]Trend — reads before first edit (weekly avg)[/b]']
                 max_rbe = max(avg for _, avg, _ in data['weekly']) or 1.0
@@ -368,7 +385,8 @@ def _build_app(root: str):  # noqa: ANN202
 
             lines += [
                 '',
-                f'[dim]Modeled orientation cost: ~${data["orient_cost_per_session"]:.4f}/session · '
+                f'[dim]Modeled orientation cost ({data["provider"]} pricing): '
+                f'~${data["orient_cost_per_session"]:.4f}/session · '
                 f'~${data["monthly_orient_cost"]:.2f}/month — the ratio is the measured signal.[/dim]',
                 "[dim]Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing[/dim]",
             ]
