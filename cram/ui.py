@@ -299,7 +299,8 @@ def _build_app(root: str):  # noqa: ANN202
             color, label = _BAND_STYLE.get(data['ratio_band'],
                                            ('white', data['ratio_band']))
             lines = [
-                f'[b]Orientation tax — last {data["days"]} days[/b]\n',
+                f'[b]Orientation tax — last {data["days"]} days[/b]'
+                f'  [dim]({data["provider"]} pricing · set CRAM_PROVIDER to change)[/dim]\n',
                 f'  Sessions analysed          {data["sessions"]}',
                 f'  Reads before first edit    {data["avg_reads_before_edit"]:.1f}   [dim]← primary metric[/dim]',
                 f'  Read-to-edit ratio         {data["avg_ratio"]:.1f}×  [{color}]{label}[/{color}]',
@@ -927,6 +928,15 @@ def main() -> None:
         prog='cram ui',
         description='TUI dashboard — orientation-tax audit, session efficiency, '
                     'decisions, context health',
+        epilog=(
+            'Cost attribution: the audit prices tokens using $CRAM_PROVIDER '
+            '(anthropic, openai, gemini, vertex_ai, bedrock, azure, local; '
+            'default anthropic). For open-source / local models use '
+            'CRAM_PROVIDER=local to zero out dollars. Set it before launching — '
+            'it is read at startup, not from within the TUI:\n'
+            '  CRAM_PROVIDER=local cram ui'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
