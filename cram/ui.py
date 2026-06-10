@@ -374,6 +374,7 @@ def _build_app(root: str):  # noqa: ANN202
                         line = line.strip()
                         if line:
                             entries.append(_json.loads(line))
+                entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
                 if not entries:
                     self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
                     return
@@ -407,6 +408,7 @@ def _build_app(root: str):  # noqa: ANN202
             log = self.query_one('#output-log', RichLog)
             log.clear()
             log.write(f'[dim]$ {cmd_str}[/dim]\n')
+            log.write('[dim]working…[/dim]\n')
 
         def append_output(self, text: str) -> None:
             self.query_one('#output-log', RichLog).write(text)
@@ -494,6 +496,22 @@ def _build_app(root: str):  # noqa: ANN202
         def on_mount(self) -> None:
             self._update_title()
             self.set_interval(30, self._auto_refresh)
+
+        def on_tabbed_content_tab_activated(self, event) -> None:
+            pane_id = event.pane.id if event.pane else None
+            refresh_map = {
+                'decisions': ('#decisions-pane', 'refresh_decisions'),
+                'sessions':  ('#sessions-pane',  'refresh_sessions'),
+                'health':    ('#health-pane',    'refresh_health'),
+                'history':   ('#history-pane',   'refresh_history'),
+            }
+            pair = refresh_map.get(pane_id)
+            if pair:
+                try:
+                    w = self.query_one(pair[0])
+                    getattr(w, pair[1])()
+                except Exception:
+                    pass
 
         def _update_title(self) -> None:
             pane = self.query_one('#decisions-pane', DecisionsPane)
