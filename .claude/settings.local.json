@@ -131,22 +131,20 @@
       "Read(//Users/vishbay/SideQuests/**)",
       "Read(//Users/vishbay/**)",
       "Bash(cram --version)",
-      "mcp__cram-ai__get_context"
+      "mcp__cram-ai__get_context",
+      "Bash(tmux kill-session *)",
+      "Bash(tmux new-session *)",
+      "Bash(/opt/homebrew/bin/tmux kill-server *)",
+      "Bash(/opt/homebrew/bin/tmux new-session *)",
+      "Bash(/opt/homebrew/bin/tmux capture-pane *)",
+      "Bash(/opt/homebrew/bin/tmux send-keys *)",
+      "Bash(cram sync *)",
+      "Bash(/opt/homebrew/bin/tmux kill-session *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/cram doctor *)"
     ]
   },
   "enabledMcpjsonServers": [
     "cram-ai"
-  ],
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 /Users/vishbay/cram-ai/.claude/hooks/cram_session_start.py"
-          }
-        ]
-      }
-    ]
-  }
+  ]
 }
