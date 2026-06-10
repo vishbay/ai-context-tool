@@ -266,7 +266,7 @@ def _archive_current_task_to_history() -> None:
         if not current_path or not os.path.exists(current_path):
             return
         content = open(current_path, errors='ignore').read().strip()
-        if not content or content.startswith('<!-- Session ended'):
+        if not content or '<!-- Session ended' in content:
             return
         task = ''
         lines = content.splitlines()

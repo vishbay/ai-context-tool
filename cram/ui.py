@@ -153,7 +153,10 @@ def _build_app(root: str):  # noqa: ANN202
 
         def _submit(self) -> None:
             value = self.query_one('#modal-input', Input).value.strip()
-            self.dismiss(value or None)
+            if not value:
+                self.notify('Task description cannot be blank', severity='warning')
+                return
+            self.dismiss(value)
 
         def action_cancel(self) -> None:
             self.dismiss(None)
@@ -560,6 +563,10 @@ def _build_app(root: str):  # noqa: ANN202
                 try:
                     actions = self.query_one('#actions-pane', ActionsPane)
                     actions.append_output(event.worker.result or '(no output)\n')
+                except Exception:
+                    pass
+                try:
+                    self.query_one('#history-pane').refresh_history()
                 except Exception:
                     pass
 

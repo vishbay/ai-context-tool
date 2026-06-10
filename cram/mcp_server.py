@@ -51,7 +51,7 @@ def _archive_current_task() -> None:
         if not os.path.exists(current_path):
             return
         content = open(current_path, errors='ignore').read().strip()
-        if not content or content.startswith('<!-- Session ended'):
+        if not content or '<!-- Session ended' in content:
             return
         # Extract task description
         task = ''
