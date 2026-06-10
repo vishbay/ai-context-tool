@@ -23,6 +23,7 @@ Core Python package containing main functionality:
 - `decide.py` - Decision recording and management; append to DECISIONS.md
 - `gotcha.py` - Non-obvious trap documentation; append to GOTCHAS.md
 - `ui.py` - Textual TUI dashboard for decisions, sessions, health, task history, and command execution
+- `benchmark.py` - Cache-write cost modeling and token savings benchmarking
 - `utils.py` - Shared utility functions for context operations
 - `__init__.py` - Package initialization
 
@@ -62,7 +63,7 @@ Test suite for the package functionality
 - Context synchronization across backends with automated git hooks
 - **Output protection by default**: Command outputs byte-capped to prevent token waste
 - Repository status monitoring (file freshness, sync state, token budgets)
-- Claude integration without API key management via MCP server
+- Claude integration via MCP server without API key management
 - Task slot namespacing for concurrent agent invocations
 - **Architectural decision tracking**: Record and mine decisions from git history
 - **Gotcha documentation**: Maintain repository-specific non-obvious traps and workarounds
@@ -84,12 +85,15 @@ Test suite for the package functionality
 CLI commands dispatched through unified `cram` entry point:
 - `cram init [path]` - Bootstrap project configuration and install git hooks
 - `cram task "<description>"` - Populate CURRENT_TASK.md before coding session
+- `cram add <files>` - Add files to current task context
+- `cram continue [path]` - Extend grace period for current task
 - `cram sync [path]` - Update ARCHITECTURE.md and SYMBOLS.md after a commit. If session grace period expired, archives current task to TASK_HISTORY.jsonl and resets task context in target files
 - `cram status [path]` - Show .ai-context/ freshness and output protection status
 - `cram decide "<statement>"` - Append architectural decision to DECISIONS.md
 - `cram decisions [--mine] [--days N]` - Show or mine decisions from git history
 - `cram gotcha "<trap>"` - Append non-obvious trap to GOTCHAS.md
 - `cram audit [--days N] [--all]` - Measure orientation tax from Claude Code transcripts
+- `cram benchmark [--days N]` - Show token savings vs full-repo auto-indexing
 - `cram doctor [path]` - Check setup: models, hooks, git, context files
 - `cram hook install|uninstall [path]` - Manage git post-commit and commit-msg hooks
 - `cram mcp [--repo PATH]` - Start MCP server (stdio) for Claude Code / agents
@@ -127,5 +131,5 @@ All Python dependencies specified in `requirements.txt` and `pyproject.toml`. In
 
 Optional extras:
 - `cram[tui]` - Textual dashboard (depends on textual>=0.80)
-- `cram[tray]` - macOS menu bar app (depends on pystray, pillow, pywebview, flask)
 - `cram[mcp]` - MCP server support (depends on mcp>=1.0.0)
+- `cram[multi-provider]` - Multi-provider LLM support (depends on litellm>=1.40.0)

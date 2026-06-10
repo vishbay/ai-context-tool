@@ -529,3 +529,58 @@ class TestArchiveTask:
         archive_task(str(tmp_path), str(tmp_path / 'nonexistent.md'))
         # No TASK_HISTORY.jsonl should be created
         assert not (ctx / 'TASK_HISTORY.jsonl').exists()
+
+
+# ---------------------------------------------------------------------------
+# B3: MCP guard — tools return actionable message before cram init
+# ---------------------------------------------------------------------------
+
+class TestInitGuard:
+    def test_get_context_before_init_returns_init_message(self, tmp_path, monkeypatch):
+        """get_context() returns an actionable message when .ai-context/ doesn't exist."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+        # No .ai-context/ directory
+
+        result = srv.get_context()
+        assert 'cram init' in result or 'init' in result.lower()
+
+    def test_get_context_task_before_init_returns_init_message(self, tmp_path, monkeypatch):
+        """get_context(task) returns an actionable message when .ai-context/ doesn't exist."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+
+        result = srv.get_context('fix the parser')
+        assert 'cram init' in result or 'init' in result.lower()
+
+    def test_get_health_before_init_returns_init_message(self, tmp_path, monkeypatch):
+        """get_health() returns an actionable message when .ai-context/ doesn't exist."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+
+        result = srv.get_health()
+        assert 'cram init' in result or 'init' in result.lower()
+
+    def test_get_architecture_before_init_returns_guidance(self, tmp_path, monkeypatch):
+        """get_architecture() returns actionable guidance when .ai-context/ doesn't exist."""
+        import cram.mcp_server as srv
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+
+        result = srv.get_architecture()
+        assert 'cram init' in result or 'not found' in result.lower()
+
+    def test_get_health_error_returns_diagnostic(self, tmp_path, monkeypatch):
+        """get_health() returns a diagnostic string rather than silently failing."""
+        import cram.mcp_server as srv
+        import cram.health as health_mod
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+        # Create .ai-context/ so the init guard passes
+        (tmp_path / CONTEXT_DIR).mkdir()
+
+        def _boom(root):
+            raise RuntimeError('disk error')
+        monkeypatch.setattr(health_mod, 'context_health', _boom)
+
+        result = srv.get_health()
+        assert 'Error' in result or 'error' in result.lower()
+        assert 'disk error' in result or 'doctor' in result

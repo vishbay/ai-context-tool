@@ -187,6 +187,17 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_decisions()
 
         def refresh_decisions(self) -> None:
+            try:
+                self._refresh_decisions_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#accepted-list', Static).update(
+                        f'[red]Error loading decisions: {ex}[/red]'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_decisions_inner(self) -> None:
             _, entries = self._load()
             pending  = [e for e in entries if e['pending']]
             accepted = [e for e in entries if not e['pending']]
@@ -319,6 +330,17 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_sessions()
 
         def refresh_sessions(self) -> None:
+            try:
+                self._refresh_sessions_inner()
+            except Exception as ex:
+                try:
+                    table = self.query_one('#sessions-table', DataTable)
+                    table.clear()
+                    table.add_row(f'Error loading sessions: {ex}', '', '', '', '', '', '')
+                except Exception:
+                    pass
+
+        def _refresh_sessions_inner(self) -> None:
             import glob as _glob
             table = self.query_one('#sessions-table', DataTable)
             table.clear()
@@ -370,6 +392,18 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_health()
 
         def refresh_health(self) -> None:
+            try:
+                self._refresh_health_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#health-body', Static).update(
+                        f'[red]Error loading health data: {ex}[/red]\n'
+                        'Run `cram doctor` from the terminal to diagnose.'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_health_inner(self) -> None:
             h = context_health(root)
             score     = h['staleness_score']
             band      = h['staleness_band']
@@ -410,6 +444,9 @@ def _build_app(root: str):  # noqa: ANN202
                     f'  [{fc}]{fname:<22}[/{fc}]  {info["tokens"]:>5} tok {budget_str}{note}'
                 )
 
+            if not h.get('files'):
+                lines.append('  [dim]No context files found. Run `cram init` first.[/dim]')
+
             self.query_one('#health-body', Static).update('\n'.join(lines))
 
     # ── History pane ─────────────────────────────────────────────
@@ -422,6 +459,17 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_history()
 
         def refresh_history(self) -> None:
+            try:
+                self._refresh_history_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#history-body', Static).update(
+                        f'[red]Error loading history: {ex}[/red]'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_history_inner(self) -> None:
             import json as _json
             from cram.session import load_session
 
@@ -435,27 +483,24 @@ def _build_app(root: str):  # noqa: ANN202
                 lines.append(f'  [dim]{ts}[/dim]  [green]{session["task"]}[/green]  [dim](active)[/dim]')
 
             history_path = os.path.join(root, '.ai-context', 'TASK_HISTORY.jsonl')
-            try:
-                entries = []
-                if os.path.exists(history_path):
-                    with open(history_path, errors='ignore') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                entries.append(_json.loads(line))
-                entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
-                entries = entries[::-1]
-                for e in entries:
-                    raw_ts = e.get('ts', '')
-                    try:
-                        dt = datetime.fromisoformat(raw_ts).astimezone()
-                        ts = dt.strftime('%Y-%m-%d %H:%M')
-                    except Exception:
-                        ts = raw_ts[:16].replace('T', ' ')
-                    task = e.get('task', '')
-                    lines.append(f'  [dim]{ts}[/dim]  {task}')
-            except Exception as ex:
-                lines.append(f'[red]Error: {ex}[/red]')
+            entries = []
+            if os.path.exists(history_path):
+                with open(history_path, errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            entries.append(_json.loads(line))
+            entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
+            entries = entries[::-1]
+            for e in entries:
+                raw_ts = e.get('ts', '')
+                try:
+                    dt = datetime.fromisoformat(raw_ts).astimezone()
+                    ts = dt.strftime('%Y-%m-%d %H:%M')
+                except Exception:
+                    ts = raw_ts[:16].replace('T', ' ')
+                task = e.get('task', '')
+                lines.append(f'  [dim]{ts}[/dim]  {task}')
 
             if len(lines) == 1:
                 self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')

@@ -342,8 +342,14 @@ def get_health() -> str:
     if not _repo_root:
         return 'Error: repo root not configured.'
 
-    from cram.health import context_health
-    h = context_health(_repo_root)
+    if not has_context_dir(_repo_root):
+        return f'Error: {CONTEXT_DIR}/ not found in {_repo_root}. Run `cram init` first.'
+
+    try:
+        from cram.health import context_health
+        h = context_health(_repo_root)
+    except Exception as ex:
+        return f'Error reading health data: {ex}. Run `cram doctor` to diagnose.'
 
     band    = h['staleness_band']
     score   = h['staleness_score']

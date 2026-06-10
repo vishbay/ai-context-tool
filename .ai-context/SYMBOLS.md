@@ -1,6 +1,5 @@
 cram/add_context.py: add_files, main
 cram/audit.py: run_audit, main
-cram/autostart.py: install, uninstall, status, main
 cram/benchmark.py: run_benchmark, main
 cram/cli.py: main
 cram/context_dir.py: canonical_context_dir, legacy_context_dir, resolve_context_dir, has_context_dir, context_path, context_basename
@@ -14,20 +13,15 @@ cram/health.py: context_health
 cram/hooks.py: install_global_claude_md, uninstall_global_claude_md, install_commit_msg_hook, install_hook, install_checkout_hook, main, install_claude_code_hooks, uninstall_hook
 cram/init.py: scan_structure, generate_architecture_md, write_gitignore, write_ci_action, init_repo, main
 cram/mcp_server.py: get_context, get_architecture, get_symbols, get_decisions, propose_decision, get_gotchas, get_health, add_file, run_benchmark, get_task_history, main
-cram/menubar.py: CramMenuBar, main
 cram/session.py: save_session, set_last_slot, get_last_slot, archive_task, load_session, touch_session, session_age, session_within_grace, clear_session
 cram/status.py: staleness_score, staleness_band, get_status_dict, show_status, main
 cram/suggest.py: suggest_task
 cram/symbols.py: extract_symbols, write_symbols_md
 cram/sync_context.py: get_git_diff, update_architecture_md, reset_task, sync, main
 cram/targets.py: load_custom_targets, get_effective_targets, get_effective_indicators, load_output_config, load_default_target, save_default_target, detect_targets, write_to_target, write_to_all_detected
-cram/tray.py: main
-cram/tray_server.py: get_active_repo, get_active_port, register_show_callback, create_app, find_free_port, run
 cram/ui.py: main
 cram/usage.py: measured_usage
 cram/utils.py: load_settings, save_settings, discover_models, pick_context_model, pick_coding_model, cache_min_tokens, get_model_recommendations, call_context_model, call_model, find_git_root, strip_code_fence
-cram/vscode.py: generate, main
-cram/tray_ui/popup.js: setState, setBadge, setHint, updateHint, showOutput, cramCopyLog, setLoading, cramMinimize, cramExpand, cramExpandIfCompact, toggleCompact, toggleHelp, fetchRepo, loadRecentRepos, toggleRepoDropdown, setRepo, cramBrowseRepo, fetchStatus, showBranchAlert, hideBranchAlert, dismissBranchAlert, onModelChange, fetchMetrics, fetchMeasured, refresh
 scripts/generate_icns.py: main
 tests/test_audit.py: TestAnalyzeTranscript, TestFindAllToolUse
 tests/test_context_dir.py: test_prefers_canonical_context_dir, test_falls_back_to_legacy_context_dir, test_context_path_uses_resolved_dir
