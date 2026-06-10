@@ -1,5 +1,6 @@
 """Tests for cram/utils.py — strip_code_fence and call_model routing."""
 
+import json
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -181,3 +182,247 @@ class TestProxyHeaders:
         call_kwargs = mock_litellm.completion.call_args[1]
         assert call_kwargs['extra_headers'] == {'Authorization': 'Bearer tok'}
         assert 'api_base' not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# _probe_lmstudio
+# ---------------------------------------------------------------------------
+
+class TestProbeLmStudio:
+    def _make_response(self, model_ids: list[str]) -> bytes:
+        return json.dumps({'data': [{'id': mid} for mid in model_ids]}).encode()
+
+    def test_returns_models_on_success(self):
+        from cram.utils import _probe_lmstudio
+        from unittest.mock import patch, MagicMock
+        cm = MagicMock()
+        cm.__enter__ = lambda s: s
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read.return_value = self._make_response(['mistral-7b-instruct', 'llama3-8b'])
+        with patch('urllib.request.urlopen', return_value=cm):
+            result = _probe_lmstudio('http://localhost:1234')
+        assert len(result) == 2
+        ids = {m['id'] for m in result}
+        assert 'lmstudio/mistral-7b-instruct' in ids
+        assert 'lmstudio/llama3-8b' in ids
+
+    def test_all_models_are_free(self):
+        from cram.utils import _probe_lmstudio
+        cm = MagicMock()
+        cm.__enter__ = lambda s: s
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read.return_value = self._make_response(['some-model'])
+        with patch('urllib.request.urlopen', return_value=cm):
+            result = _probe_lmstudio()
+        assert all(m['cost'] == 0 for m in result)
+        assert all(m['provider'] == 'lmstudio' for m in result)
+
+    def test_returns_empty_on_connection_refused(self):
+        from cram.utils import _probe_lmstudio
+        with patch('urllib.request.urlopen', side_effect=OSError('refused')):
+            assert _probe_lmstudio() == []
+
+    def test_size_tier_small_is_context(self):
+        from cram.utils import _probe_lmstudio
+        cm = MagicMock()
+        cm.__enter__ = lambda s: s
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read.return_value = self._make_response(['llama-3b', 'llama-70b'])
+        with patch('urllib.request.urlopen', return_value=cm):
+            result = _probe_lmstudio()
+        by_id = {m['id']: m for m in result}
+        assert by_id['lmstudio/llama-3b']['tier'] == 'context'
+        assert by_id['lmstudio/llama-70b']['tier'] == 'coding'
+
+
+# ---------------------------------------------------------------------------
+# _call_via_openai_compat
+# ---------------------------------------------------------------------------
+
+class TestCallViaOpenaiCompat:
+    def _mock_urlopen(self, response_text: str):
+        cm = MagicMock()
+        cm.__enter__ = lambda s: s
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read.return_value = json.dumps({
+            'choices': [{'message': {'content': response_text}}]
+        }).encode()
+        return cm
+
+    def test_posts_to_chat_completions(self):
+        from cram.utils import _call_via_openai_compat
+        cm = self._mock_urlopen('hello back')
+        with patch('urllib.request.urlopen', return_value=cm) as mock_open:
+            result = _call_via_openai_compat('hello', 'my-model', 'http://localhost:1234')
+        assert result == 'hello back'
+        req = mock_open.call_args[0][0]
+        assert req.full_url == 'http://localhost:1234/v1/chat/completions'
+
+    def test_sets_authorization_header_when_key_given(self):
+        from cram.utils import _call_via_openai_compat
+        cm = self._mock_urlopen('hi')
+        with patch('urllib.request.urlopen', return_value=cm) as mock_open:
+            _call_via_openai_compat('hi', 'model', 'http://host', api_key='mykey')
+        req = mock_open.call_args[0][0]
+        assert req.get_header('Authorization') == 'Bearer mykey'
+
+    def test_no_auth_header_when_no_key(self):
+        from cram.utils import _call_via_openai_compat
+        cm = self._mock_urlopen('ok')
+        with patch('urllib.request.urlopen', return_value=cm) as mock_open:
+            _call_via_openai_compat('ok', 'model', 'http://host')
+        req = mock_open.call_args[0][0]
+        assert req.get_header('Authorization') is None
+
+    def test_trailing_slash_stripped_from_base_url(self):
+        from cram.utils import _call_via_openai_compat
+        cm = self._mock_urlopen('ok')
+        with patch('urllib.request.urlopen', return_value=cm) as mock_open:
+            _call_via_openai_compat('ok', 'model', 'http://host:1234/')
+        req = mock_open.call_args[0][0]
+        assert req.full_url == 'http://host:1234/v1/chat/completions'
+
+
+# ---------------------------------------------------------------------------
+# _call_via_gemini
+# ---------------------------------------------------------------------------
+
+class TestCallViaGemini:
+    def test_uses_sdk_when_available(self, monkeypatch):
+        from cram.utils import _call_via_gemini
+        monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+
+        mock_genai = MagicMock()
+        mock_model_inst = MagicMock()
+        mock_model_inst.generate_content.return_value.text = '  sdk response  '
+        mock_genai.GenerativeModel.return_value = mock_model_inst
+
+        # For `import google.generativeai as genai`, Python binds `genai` to
+        # sys.modules['google'].generativeai — so the google mock must carry the attribute.
+        mock_google = MagicMock()
+        mock_google.generativeai = mock_genai
+        with patch.dict('sys.modules', {'google': mock_google,
+                                         'google.generativeai': mock_genai}):
+            result = _call_via_gemini('hello', 'gemini/gemini-2.0-flash')
+
+        assert result == 'sdk response'
+        mock_genai.configure.assert_called_once_with(api_key='test-key')
+        mock_genai.GenerativeModel.assert_called_once_with('gemini-2.0-flash')
+
+    def test_http_fallback_when_sdk_missing(self, monkeypatch):
+        from cram.utils import _call_via_gemini
+        monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+
+        response_body = json.dumps({
+            'candidates': [{'content': {'parts': [{'text': 'http response'}]}}]
+        }).encode()
+        cm = MagicMock()
+        cm.__enter__ = lambda s: s
+        cm.__exit__ = MagicMock(return_value=False)
+        cm.read.return_value = response_body
+
+        # Setting entries to None causes ImportError on `import google.generativeai`
+        with patch.dict('sys.modules', {'google': None, 'google.generativeai': None}):
+            with patch('urllib.request.urlopen', return_value=cm):
+                result = _call_via_gemini('hello', 'gemini/gemini-2.0-flash')
+
+        assert result == 'http response'
+
+    def test_bare_model_name_accepted(self, monkeypatch):
+        """Model passed without 'gemini/' prefix still works."""
+        from cram.utils import _call_via_gemini
+        monkeypatch.setenv('GEMINI_API_KEY', 'key')
+
+        mock_genai = MagicMock()
+        mock_model_inst = MagicMock()
+        mock_model_inst.generate_content.return_value.text = 'ok'
+        mock_genai.GenerativeModel.return_value = mock_model_inst
+
+        mock_google = MagicMock()
+        mock_google.generativeai = mock_genai
+        with patch.dict('sys.modules', {'google': mock_google,
+                                         'google.generativeai': mock_genai}):
+            _call_via_gemini('hi', 'gemini-2.0-flash')  # no prefix
+
+        mock_genai.GenerativeModel.assert_called_once_with('gemini-2.0-flash')
+
+    def test_vertex_ai_prefix_delegates_to_litellm(self, monkeypatch):
+        from cram.utils import _call_via_gemini
+        with patch('cram.utils._call_via_litellm', return_value='litellm-resp') as mock_ll:
+            result = _call_via_gemini('hi', 'vertex_ai/gemini-2.5-pro')
+        assert result == 'litellm-resp'
+        mock_ll.assert_called_once_with('hi', 'vertex_ai/gemini-2.5-pro')
+
+
+# ---------------------------------------------------------------------------
+# call_context_model routing — gemini and lmstudio
+# ---------------------------------------------------------------------------
+
+class TestCallContextModelRouting:
+    def test_gemini_prefix_routes_to_call_via_gemini(self):
+        from cram.utils import call_context_model
+        with patch('cram.utils.load_settings', return_value={'context_model': 'gemini/gemini-2.0-flash'}):
+            with patch('cram.utils._call_via_gemini', return_value='gem') as mock_g:
+                result = call_context_model('prompt')
+        assert result == 'gem'
+        mock_g.assert_called_once_with('prompt', 'gemini/gemini-2.0-flash')
+
+    def test_lmstudio_prefix_routes_to_openai_compat(self):
+        from cram.utils import call_context_model
+        settings = {'context_model': 'lmstudio/my-model', 'lmstudio_url': 'http://localhost:1234'}
+        with patch('cram.utils.load_settings', return_value=settings):
+            with patch('cram.utils._call_via_openai_compat', return_value='lms') as mock_lms:
+                result = call_context_model('prompt')
+        assert result == 'lms'
+        mock_lms.assert_called_once_with('prompt', 'my-model', 'http://localhost:1234')
+
+    def test_lmstudio_default_url_used_when_not_configured(self):
+        from cram.utils import call_context_model
+        with patch('cram.utils.load_settings', return_value={'context_model': 'lmstudio/m'}):
+            with patch('cram.utils._call_via_openai_compat', return_value='ok') as mock_lms:
+                call_context_model('hi')
+        assert mock_lms.call_args[0][2] == 'http://localhost:1234'
+
+    def test_vertex_ai_prefix_routes_to_call_via_gemini(self):
+        from cram.utils import call_context_model
+        with patch('cram.utils.load_settings', return_value={'context_model': 'vertex_ai/gemini-2.5-pro'}):
+            with patch('cram.utils._call_via_gemini', return_value='vx') as mock_g:
+                result = call_context_model('hi')
+        assert result == 'vx'
+
+
+# ---------------------------------------------------------------------------
+# discover_models includes LM Studio
+# ---------------------------------------------------------------------------
+
+class TestDiscoverModelsLmStudio:
+    def test_lmstudio_included_when_running(self):
+        from cram.utils import discover_models
+        lmstudio_model = {
+            'id': 'lmstudio/llama3-8b', 'name': 'llama3-8b (local LM Studio)',
+            'provider': 'lmstudio', 'tier': 'context', 'cost': 0, 'quality': 4,
+            'base_url': 'http://localhost:1234',
+        }
+        with patch('cram.utils._check_claude_cli', return_value=False), \
+             patch('cram.utils._probe_ollama', return_value=[]), \
+             patch('cram.utils._probe_lmstudio', return_value=[lmstudio_model]), \
+             patch('cram.utils._check_aws_credentials', return_value=False), \
+             patch('cram.utils._check_gcp_credentials', return_value=False), \
+             patch('cram.utils._check_azure_credentials', return_value=False), \
+             patch('cram.utils.load_settings', return_value={}), \
+             patch.dict('os.environ', {}, clear=True):
+            result = discover_models()
+        assert any(m['provider'] == 'lmstudio' for m in result)
+
+    def test_lmstudio_not_included_when_offline(self):
+        from cram.utils import discover_models
+        with patch('cram.utils._check_claude_cli', return_value=False), \
+             patch('cram.utils._probe_ollama', return_value=[]), \
+             patch('cram.utils._probe_lmstudio', return_value=[]), \
+             patch('cram.utils._check_aws_credentials', return_value=False), \
+             patch('cram.utils._check_gcp_credentials', return_value=False), \
+             patch('cram.utils._check_azure_credentials', return_value=False), \
+             patch('cram.utils.load_settings', return_value={}), \
+             patch.dict('os.environ', {}, clear=True):
+            result = discover_models()
+        assert not any(m['provider'] == 'lmstudio' for m in result)

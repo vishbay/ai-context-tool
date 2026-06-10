@@ -328,6 +328,28 @@ def _build_app(root: str):  # noqa: ANN202
                     f'  Context per request        {data["avg_context_per_request"]:,.0f} tok'
                     f'  [dim](peak {data["peak_context"]:,})[/dim]'
                 )
+                if data.get('avg_first_context'):
+                    lines.append(
+                        f'  Context at session start   {data["avg_first_context"]:,.0f} tok'
+                        f'  [dim](system prompt + initial msg)[/dim]'
+                    )
+                growth = data.get('avg_context_growth')
+                if growth is not None:
+                    n_g = data.get('context_growth_measured', 0)
+                    if growth > 5:
+                        gcolor, glabel = 'red', '⚠ heavy bloat'
+                    elif growth > 2:
+                        gcolor, glabel = 'yellow', '↑ growing'
+                    else:
+                        gcolor, glabel = 'green', 'stable'
+                    lines.append(
+                        f'  Context growth/session     [{gcolor}]{growth:.1f}×  {glabel}[/{gcolor}]'
+                        f'  [dim]({n_g} session{"s" if n_g != 1 else ""})[/dim]'
+                    )
+                if data.get('avg_output_tokens'):
+                    lines.append(
+                        f'  Avg output tokens/request  {data["avg_output_tokens"]:,.0f}'
+                    )
                 tail = data['bloat_tail_share']
                 if tail is not None:
                     if tail <= 0.36:

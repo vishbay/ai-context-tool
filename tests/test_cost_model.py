@@ -183,3 +183,37 @@ class TestResolveProvider:
         from cram.cost_model import resolve_provider
         assert resolve_provider('not-a-provider') == 'anthropic'
         assert resolve_provider('  Gemini ') == 'gemini'
+
+    def test_enterprise_providers_recognised(self):
+        from cram.cost_model import resolve_provider
+        assert resolve_provider('vertex_ai') == 'vertex_ai'
+        assert resolve_provider('bedrock')   == 'bedrock'
+        assert resolve_provider('azure')     == 'azure'
+
+
+class TestEnterpriseProviderPricing:
+    """vertex_ai, bedrock, azure share pricing with their base providers."""
+
+    def test_vertex_ai_matches_gemini_pricing(self):
+        from cram.cost_model import get_provider_pricing
+        assert get_provider_pricing('vertex_ai') == get_provider_pricing('gemini')
+
+    def test_bedrock_matches_anthropic_pricing(self):
+        from cram.cost_model import get_provider_pricing
+        assert get_provider_pricing('bedrock') == get_provider_pricing('anthropic')
+
+    def test_azure_matches_openai_pricing(self):
+        from cram.cost_model import get_provider_pricing
+        assert get_provider_pricing('azure') == get_provider_pricing('openai')
+
+    def test_all_providers_have_required_fields(self):
+        from cram.cost_model import PROVIDER_PRICING
+        required = {'input_per_mtok', 'cache_write_mult', 'cache_read_mult'}
+        for name, pricing in PROVIDER_PRICING.items():
+            assert required <= pricing.keys(), f'{name} missing fields'
+
+    def test_cram_provider_env_vertex_ai(self, monkeypatch):
+        from cram.cost_model import get_provider_pricing
+        monkeypatch.setenv('CRAM_PROVIDER', 'vertex_ai')
+        p = get_provider_pricing()
+        assert p['input_per_mtok'] == 1.25

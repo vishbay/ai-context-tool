@@ -1,6 +1,7 @@
 """Tests for cram/audit.py — transcript analysis and efficiency metrics."""
 
 from __future__ import annotations
+import datetime
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import pytest
 from cram.audit import (
     _analyze_transcript, _find_all_tool_use, collect_audit, ratio_band,
     AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE,
+    _analyze_cursor_transcript, _analyze_cursor_workspace_db,
 )
 
 
@@ -523,3 +525,308 @@ class TestAuditConstants:
         assert r['reads_before_edit'] == 2
         assert r['edits'] == 1
         assert abs(r['ratio'] - 2.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Cursor support
+# ---------------------------------------------------------------------------
+
+def _write_cursor_jsonl(path: str, repo_root: str, events: list[tuple[str, list[str]]]) -> None:
+    """Write a Cursor agent-transcript JSONL file.
+
+    events: list of (tool_name, [file_path, ...]) tuples.
+    """
+    with open(path, 'w') as f:
+        for tool, files in events:
+            entry = {
+                'version': 1,
+                'tool': tool,
+                'vcs': {'root': repo_root},
+                'files': files,
+                'input': {'target_file': files[0]} if files else {},
+                'timestamp': 1_700_000_000_000,
+            }
+            f.write(json.dumps(entry) + '\n')
+
+
+class TestCursorTranscript:
+    """_analyze_cursor_transcript — Cursor JSONL agent-transcript parser."""
+
+    def test_counts_reads_and_edits(self, tmp_path):
+        repo = '/repo/myproject'
+        path = str(tmp_path / 'session.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('read_file',  [repo + '/a.py']),
+            ('grep_search', [repo + '/a.py']),
+            ('edit_file',  [repo + '/a.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r is not None
+        assert r['reads'] == 2
+        assert r['reads_before_edit'] == 2
+        assert r['edits'] == 1
+        assert abs(r['ratio'] - 2.0) < 0.01
+
+    def test_reads_after_first_edit_not_counted(self, tmp_path):
+        repo = '/repo/proj'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('read_file',  [repo + '/x.py']),
+            ('edit_file',  [repo + '/x.py']),
+            ('read_file',  [repo + '/y.py']),  # after edit — not in reads_before_edit
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r['reads'] == 2
+        assert r['reads_before_edit'] == 1
+
+    def test_filters_out_other_repo_events(self, tmp_path):
+        repo = '/repo/mine'
+        other = '/repo/other'
+        path = str(tmp_path / 's.jsonl')
+        with open(path, 'w') as f:
+            # other repo read
+            f.write(json.dumps({'version': 1, 'tool': 'read_file',
+                                'vcs': {'root': other},
+                                'files': [other + '/foo.py']}) + '\n')
+            # our repo edit
+            f.write(json.dumps({'version': 1, 'tool': 'edit_file',
+                                'vcs': {'root': repo},
+                                'files': [repo + '/bar.py']}) + '\n')
+        r = _analyze_cursor_transcript(path, repo)
+        assert r is not None
+        assert r['reads'] == 0
+        assert r['edits'] == 1
+
+    def test_returns_none_when_no_relevant_activity(self, tmp_path):
+        repo = '/repo/mine'
+        other = '/repo/other'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, other, [
+            ('read_file', [other + '/foo.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r is None
+
+    def test_redundant_reads_counted(self, tmp_path):
+        repo = '/repo/p'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('read_file', [repo + '/a.py']),
+            ('read_file', [repo + '/a.py']),
+            ('read_file', [repo + '/a.py']),
+            ('read_file', [repo + '/b.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r['redundant_reads'] == 2
+
+    def test_edit_churn_counted(self, tmp_path):
+        repo = '/repo/p'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('edit_file', [repo + '/a.py']),
+            ('edit_file', [repo + '/a.py']),
+            ('edit_file', [repo + '/b.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r['edit_churn'] == 1  # a.py edited twice → churn 1
+
+    def test_token_fields_zeroed(self, tmp_path):
+        repo = '/repo/p'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('read_file', [repo + '/a.py']),
+            ('edit_file', [repo + '/a.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r is not None
+        assert r['cache_writes'] == 0
+        assert r['cache_reads'] == 0
+        assert r['requests'] == 0
+        assert r['peak_context'] == 0
+        assert r['tail_share'] is None
+        assert r['source'] == 'cursor'
+
+    def test_codebase_search_counted_as_read(self, tmp_path):
+        repo = '/repo/p'
+        path = str(tmp_path / 's.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('codebase_search', [repo + '/a.py']),
+            ('edit_file',       [repo + '/a.py']),
+        ])
+        r = _analyze_cursor_transcript(path, repo)
+        assert r['reads_before_edit'] == 1
+
+    def test_run_terminal_command_with_grep_counted_as_read(self, tmp_path):
+        repo = '/repo/p'
+        path = str(tmp_path / 's.jsonl')
+        with open(path, 'w') as f:
+            f.write(json.dumps({
+                'tool': 'run_terminal_command',
+                'vcs': {'root': repo},
+                'files': [repo + '/a.py'],
+                'input': {'command': 'grep -n def a.py'},
+            }) + '\n')
+            f.write(json.dumps({
+                'tool': 'edit_file',
+                'vcs': {'root': repo},
+                'files': [repo + '/a.py'],
+            }) + '\n')
+        r = _analyze_cursor_transcript(path, repo)
+        assert r['reads_before_edit'] == 1
+
+    def test_empty_file_returns_none(self, tmp_path):
+        path = str(tmp_path / 'empty.jsonl')
+        open(path, 'w').close()
+        r = _analyze_cursor_transcript(path, '/repo/p')
+        assert r is None
+
+    def test_missing_file_returns_none(self, tmp_path):
+        r = _analyze_cursor_transcript(str(tmp_path / 'nope.jsonl'), '/repo/p')
+        assert r is None
+
+
+class TestCursorWorkspaceDb:
+    """_analyze_cursor_workspace_db — SQLite workspace parser."""
+
+    def _make_db(self, path: str, bubbles: list[dict]) -> None:
+        import sqlite3
+        con = sqlite3.connect(path)
+        con.execute('CREATE TABLE cursorDiskKV (key TEXT, value TEXT)')
+        for bubble in bubbles:
+            composer_id = bubble.pop('_composerId', 'comp1')
+            bubble_id   = bubble.pop('_bubbleId',   f'bub{id(bubble)}')
+            key = f'bubbleId:{composer_id}:{bubble_id}'
+            con.execute('INSERT INTO cursorDiskKV VALUES (?, ?)',
+                        (key, json.dumps(bubble)))
+        con.commit()
+        con.close()
+
+    def test_reads_and_edits_from_sqlite(self, tmp_path):
+        repo = '/repo/p'
+        db = str(tmp_path / 'state.vscdb')
+        self._make_db(db, [
+            {'_composerId': 'c1', '_bubbleId': 'b1', 'type': 2, 'createdAt': 1_700_000_001_000,
+             'toolFormerData': [
+                 {'toolName': 'read_file', 'params': {'target_file': repo + '/a.py'}},
+                 {'toolName': 'read_file', 'params': {'target_file': repo + '/b.py'}},
+             ]},
+            {'_composerId': 'c1', '_bubbleId': 'b2', 'type': 2, 'createdAt': 1_700_000_002_000,
+             'toolFormerData': [
+                 {'toolName': 'edit_file', 'params': {'target_file': repo + '/a.py'}},
+             ]},
+        ])
+        cutoff = datetime.datetime(2020, 1, 1)
+        result = _analyze_cursor_workspace_db(db, repo, cutoff)
+        assert len(result) == 1
+        sess = result[0]
+        assert sess['reads'] == 2
+        assert sess['reads_before_edit'] == 2
+        assert sess['edits'] == 1
+        assert sess['source'] == 'cursor'
+
+    def test_filters_other_repo(self, tmp_path):
+        repo = '/repo/mine'
+        other = '/repo/other'
+        db = str(tmp_path / 'state.vscdb')
+        self._make_db(db, [
+            {'_composerId': 'c1', '_bubbleId': 'b1', 'type': 2, 'createdAt': 1_700_000_001_000,
+             'toolFormerData': [
+                 {'toolName': 'read_file', 'params': {'target_file': other + '/x.py'}},
+             ]},
+        ])
+        cutoff = datetime.datetime(2020, 1, 1)
+        result = _analyze_cursor_workspace_db(db, repo, cutoff)
+        assert result == []
+
+    def test_groups_by_composer_id(self, tmp_path):
+        repo = '/repo/p'
+        db = str(tmp_path / 'state.vscdb')
+        self._make_db(db, [
+            {'_composerId': 'c1', '_bubbleId': 'b1', 'type': 2, 'createdAt': 1_700_000_001_000,
+             'toolFormerData': [{'toolName': 'read_file',
+                                 'params': {'target_file': repo + '/a.py'}}]},
+            {'_composerId': 'c2', '_bubbleId': 'b2', 'type': 2, 'createdAt': 1_700_000_001_000,
+             'toolFormerData': [{'toolName': 'edit_file',
+                                 'params': {'target_file': repo + '/b.py'}}]},
+        ])
+        cutoff = datetime.datetime(2020, 1, 1)
+        result = _analyze_cursor_workspace_db(db, repo, cutoff)
+        # Two separate composers → two sessions
+        assert len(result) == 2
+
+    def test_missing_table_returns_empty(self, tmp_path):
+        import sqlite3
+        db = str(tmp_path / 'state.vscdb')
+        con = sqlite3.connect(db)
+        con.execute('CREATE TABLE unrelated (k TEXT, v TEXT)')
+        con.commit()
+        con.close()
+        result = _analyze_cursor_workspace_db(db, '/repo/p', datetime.datetime(2020, 1, 1))
+        assert result == []
+
+    def test_returns_empty_for_nonexistent_file(self, tmp_path):
+        result = _analyze_cursor_workspace_db(
+            str(tmp_path / 'nope.vscdb'), '/repo/p', datetime.datetime(2020, 1, 1)
+        )
+        assert result == []
+
+
+class TestCollectAuditWithCursor:
+    """collect_audit merges Cursor sessions when Claude transcripts absent or present."""
+
+    def test_cursor_sessions_included_when_no_claude_transcripts(
+        self, tmp_path, monkeypatch
+    ):
+        import cram.audit as _audit_mod
+
+        repo = str(tmp_path / 'repo')
+        at_dir = tmp_path / 'agent-transcripts'
+        at_dir.mkdir()
+        path = str(at_dir / 'session.jsonl')
+        _write_cursor_jsonl(path, repo, [
+            ('read_file',  [repo + '/a.py']),
+            ('read_file',  [repo + '/b.py']),
+            ('edit_file',  [repo + '/a.py']),
+        ])
+
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir', lambda r: None)
+        monkeypatch.setattr(_audit_mod, '_cursor_agent_transcripts_dir',
+                            lambda: str(at_dir))
+
+        data = _audit_mod.collect_audit(repo, days=365)
+        assert data is not None
+        assert data['sessions'] == 1
+        assert data['avg_reads_before_edit'] == 2.0
+
+    def test_cursor_sessions_merged_with_claude_sessions(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+
+        repo = str(tmp_path / 'repo')
+
+        # Claude Code transcript
+        claude_dir = tmp_path / 'claude'
+        claude_dir.mkdir()
+        with open(str(claude_dir / 'claude.jsonl'), 'w') as f:
+            for name, inp in [('Read', {'file_path': repo + '/c.py'}), ('Edit', {})]:
+                f.write(json.dumps({'type': 'tool_use', 'name': name, 'input': inp}) + '\n')
+
+        # Cursor transcript
+        at_dir = tmp_path / 'agent-transcripts'
+        at_dir.mkdir()
+        cursor_path = str(at_dir / 'cursor.jsonl')
+        _write_cursor_jsonl(cursor_path, repo, [
+            ('read_file',  [repo + '/a.py']),
+            ('read_file',  [repo + '/b.py']),
+            ('edit_file',  [repo + '/a.py']),
+        ])
+
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda r: str(claude_dir))
+        monkeypatch.setattr(_audit_mod, '_cursor_agent_transcripts_dir',
+                            lambda: str(at_dir))
+
+        data = _audit_mod.collect_audit(repo, days=365)
+        assert data is not None
+        assert data['sessions'] == 2
+        # claude: rbe=1, cursor: rbe=2 → avg=1.5
+        assert abs(data['avg_reads_before_edit'] - 1.5) < 0.01

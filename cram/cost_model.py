@@ -30,6 +30,11 @@ PROVIDER_PRICING = {
     'openai':    {'input_per_mtok': 2.50, 'cache_write_mult': 1.00, 'cache_read_mult': 0.50},
     'gemini':    {'input_per_mtok': 1.25, 'cache_write_mult': 1.00, 'cache_read_mult': 0.25},
     'local':     {'input_per_mtok': 0.00, 'cache_write_mult': 0.00, 'cache_read_mult': 0.00},
+    # Enterprise / hosted variants share the same model pricing as their base providers.
+    # Vertex AI hosts Gemini models; Bedrock hosts Claude; Azure hosts OpenAI.
+    'vertex_ai': {'input_per_mtok': 1.25, 'cache_write_mult': 1.00, 'cache_read_mult': 0.25},
+    'bedrock':   {'input_per_mtok': 3.00, 'cache_write_mult': 1.25, 'cache_read_mult': 0.10},
+    'azure':     {'input_per_mtok': 2.50, 'cache_write_mult': 1.00, 'cache_read_mult': 0.50},
 }
 
 # Anthropic multipliers, kept as module constants — other modules import them.

@@ -108,6 +108,33 @@ def _probe_ollama(base_url: str = 'http://localhost:11434') -> list[dict]:
         return []
 
 
+def _probe_lmstudio(base_url: str = 'http://localhost:1234') -> list[dict]:
+    """Probe LM Studio for loaded models via its OpenAI-compatible /v1/models endpoint."""
+    try:
+        with urllib.request.urlopen(f'{base_url}/v1/models', timeout=2) as r:
+            data = json.loads(r.read())
+        result = []
+        for m in data.get('data', []):
+            mid = m.get('id', '')
+            if not mid:
+                continue
+            name_lower = mid.lower()
+            size_match = re.search(r'(\d+)b', name_lower)
+            size = int(size_match.group(1)) if size_match else 7
+            result.append({
+                'id':       f'lmstudio/{mid}',
+                'name':     f'{mid} (local LM Studio)',
+                'provider': 'lmstudio',
+                'tier':     'context' if size <= 8 else 'coding',
+                'cost':     0,
+                'quality':  min(2 + size // 4, 8),
+                'base_url': base_url,
+            })
+        return result
+    except Exception:
+        return []
+
+
 def _check_aws_credentials() -> bool:
     if os.environ.get('AWS_ACCESS_KEY_ID') or os.environ.get('AWS_PROFILE'):
         return True
@@ -144,19 +171,22 @@ def discover_models() -> list[dict]:
     settings = load_settings()
     available.extend(_probe_ollama(settings.get('ollama_url', 'http://localhost:11434')))
 
-    # 3. Enterprise: AWS Bedrock (IAM / instance role, no API key needed)
+    # 3. LM Studio — local, free, OpenAI-compatible (default port 1234)
+    available.extend(_probe_lmstudio(settings.get('lmstudio_url', 'http://localhost:1234')))
+
+    # 4. Enterprise: AWS Bedrock (IAM / instance role, no API key needed)
     if _check_aws_credentials():
         _add('bedrock')
 
-    # 4. Enterprise: GCP Vertex AI (ADC / service account, no API key needed)
+    # 5. Enterprise: GCP Vertex AI (ADC / service account, no API key needed)
     if _check_gcp_credentials():
         _add('vertex_ai')
 
-    # 5. Enterprise: Azure OpenAI (managed identity / AZURE_OPENAI_ENDPOINT)
+    # 6. Enterprise: Azure OpenAI (managed identity / AZURE_OPENAI_ENDPOINT)
     if _check_azure_credentials():
         _add('azure')
 
-    # 6. Direct API keys
+    # 7. Direct API keys
     if os.environ.get('ANTHROPIC_API_KEY'):
         _add('anthropic')
     if os.environ.get('OPENAI_API_KEY'):
@@ -164,7 +194,7 @@ def discover_models() -> list[dict]:
     if os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'):
         _add('gemini')
 
-    # 7. Custom proxy (corporate gateway, LiteLLM proxy, etc.)
+    # 8. Custom proxy (corporate gateway, LiteLLM proxy, etc.)
     proxy = settings.get('proxy', {})
     if proxy.get('base_url'):
         available.append({
@@ -244,6 +274,12 @@ def call_context_model(prompt: str) -> str:
         settings = load_settings()
         base_url = settings.get('ollama_url', 'http://localhost:11434')
         return _call_via_ollama(prompt, model_id[len('ollama/'):], base_url)
+    if model_id.startswith('lmstudio/'):
+        settings = load_settings()
+        base_url = settings.get('lmstudio_url', 'http://localhost:1234')
+        return _call_via_openai_compat(prompt, model_id[len('lmstudio/'):], base_url)
+    if model_id.startswith('gemini/') or model_id.startswith('vertex_ai/'):
+        return _call_via_gemini(prompt, model_id)
     if '/' in model_id:
         return _call_via_litellm(prompt, model_id)
     return _call_via_cli(prompt, model_id)
@@ -303,6 +339,70 @@ def _call_via_ollama(prompt: str, model: str, base_url: str = 'http://localhost:
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())['response'].strip()
+
+
+def _call_via_openai_compat(prompt: str, model: str, base_url: str,
+                            api_key: str = '') -> str:
+    """Call any OpenAI-compatible API (LM Studio, vLLM, Jan, etc.) via raw HTTP."""
+    url = base_url.rstrip('/') + '/v1/chat/completions'
+    payload = json.dumps({
+        'model':      model,
+        'messages':   [{'role': 'user', 'content': prompt}],
+        'max_tokens': 1500,
+        'stream':     False,
+    }).encode()
+    headers = {'Content-Type': 'application/json'}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+    req = urllib.request.Request(url, data=payload, headers=headers)
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = json.loads(r.read())
+    return data['choices'][0]['message']['content'].strip()
+
+
+def _call_via_gemini(prompt: str, model: str) -> str:
+    """Call Google Gemini API directly — no litellm required.
+
+    Tries the google-generativeai SDK first; falls back to raw HTTPS if
+    the package is not installed. API key read from GEMINI_API_KEY or
+    GOOGLE_API_KEY. Routes through litellm for vertex_ai/ prefix (GCP ADC).
+    """
+    # vertex_ai models require GCP credentials + litellm; delegate
+    if model.startswith('vertex_ai/'):
+        return _call_via_litellm(prompt, model)
+
+    bare = model.split('/', 1)[1] if '/' in model else model
+    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY', '')
+
+    if not api_key:
+        # No key — may work via litellm if ADC is configured
+        return _call_via_litellm(prompt, f'gemini/{bare}')
+
+    # ── SDK path ──────────────────────────────────────────────────
+    try:
+        import google.generativeai as genai  # type: ignore[import]
+        genai.configure(api_key=api_key)
+        gen_model = genai.GenerativeModel(bare)
+        response = gen_model.generate_content(prompt)
+        return response.text.strip()
+    except ImportError:
+        pass  # SDK not installed — fall through to HTTP
+
+    # ── Raw HTTPS fallback ────────────────────────────────────────
+    url = (
+        'https://generativelanguage.googleapis.com/v1beta/models/'
+        f'{bare}:generateContent?key={api_key}'
+    )
+    payload = json.dumps({
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'maxOutputTokens': 1500},
+    }).encode()
+    req = urllib.request.Request(
+        url, data=payload, headers={'Content-Type': 'application/json'}
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = json.loads(r.read())
+    return data['candidates'][0]['content']['parts'][0]['text'].strip()
 
 
 def _call_via_litellm(prompt: str, model: str) -> str:
