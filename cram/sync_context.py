@@ -48,7 +48,7 @@ def update_architecture_md(structure: str, diff: str, current: str) -> str:
         f"Recent git diff:\n{diff}\n\n"
         f"Return only the updated markdown, no explanation."
     )
-    return strip_code_fence(call_model(prompt))
+    return strip_code_fence(call_context_model(prompt))
 
 
 def reset_task(root: str) -> None:

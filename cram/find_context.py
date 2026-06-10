@@ -237,7 +237,7 @@ def find_relevant_files(
         f"  relative/path/to/file.ext | RelevantFunc, AnotherClass\n"
         f"If no specific identifiers match, output path only. No explanation."
     )
-    raw_lines = call_model(prompt).strip().splitlines()
+    raw_lines = call_context_model(prompt).strip().splitlines()
 
     results: list[tuple[str, list[str]]] = []
     for raw in raw_lines:
