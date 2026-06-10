@@ -265,18 +265,24 @@ pip install 'cram-ai[tui]'
 cram ui
 ```
 
-Four tabs:
+Five tabs:
 
 - **Decisions** (default) — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
-- **Sessions** — recent Claude Code sessions with reads, edits, and read-to-edit ratio.
+- **Sessions** — recent Claude Code sessions with reads, edits, read-to-edit ratio, and
+  the **task that was active** during each session. Task names are inferred from
+  `TASK_HISTORY.jsonl` by matching each session's timestamp against task time windows.
   Ratio > 5× is flagged — context isn't landing for those sessions.
-- **Health** — staleness score, per-file token budgets, active task slots.
-- **History** — recent `cram task` invocations with timestamps. This is a recall aid
-  ("what was I working on last Tuesday?"), not a project management tool — there are no
-  lifecycle states, completion tracking, or status transitions.
+- **Health** — staleness score, commits since last sync, per-file token budgets.
+- **History** — recent `cram task` invocations with timestamps. The **active session
+  task** is shown at the top in green (it lives in `session.json` and hasn't been
+  archived yet). This is a recall aid ("what was I working on last Tuesday?"), not a
+  project management tool.
+- **Actions** — run `cram sync`, `cram task`, `cram benchmark`, or `cram doctor` from
+  inside the TUI. An animated progress bar shows while a command is running.
 
-Auto-refreshes every 30 seconds. `r` forces a refresh, `q` quits.
+Each tab refreshes its data when you switch to it. Auto-refreshes every 30 seconds.
+`r` forces a full refresh, `q` quits.
 
 ---
 
@@ -344,6 +350,10 @@ cram tracks how stale your context is with a **0–10 staleness score** derived 
 number of commits on HEAD since ARCHITECTURE.md was last regenerated. No new state files; the
 score is always correct after a teammate pull.
 
+The post-commit hook writes ARCHITECTURE.md to disk but does not commit it. The health check
+detects this correctly: if the file has uncommitted changes (i.e., it was rewritten by `cram sync`
+after the last commit), the score is reported as 0 — not stale.
+
 | Score | Band | Meaning |
 |---|---|---|
 | 0–2 | `fresh` | Up to date — work freely |
@@ -401,7 +411,7 @@ across different checkouts or machines.
 | `cram mcp [--repo PATH]` | Start MCP server (stdio). Wire into your tool's settings once; clients launch it automatically. |
 | `cram task "..." [--target T]` | Run context pipeline, write CURRENT_TASK.md, optionally inject into tool's auto-loaded file |
 | `cram decisions [--mine] [--days N]` | Show DECISIONS.md, or mine git history for decision-shaped commits and review interactively |
-| `cram sync [path]` | Refresh ARCHITECTURE.md + SYMBOLS.md from current repo state |
+| `cram sync [path]` | Refresh ARCHITECTURE.md + SYMBOLS.md from current repo state. If the session grace period has expired, archives the current task to `TASK_HISTORY.jsonl` and resets the task context in all target files (your instructions are untouched — only the cram-managed task section is cleared). |
 | `cram decide "..." [path]` | Append a dated architectural decision to DECISIONS.md |
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
