@@ -344,6 +344,12 @@ def populate_current_task(
 
 
 def find_context(task: str, target: str | None = None, inject: bool = False, root: str = '.') -> None:
+    if inject:
+        print(
+            "Warning: --inject is deprecated; MCP delivery is the supported path. See README.",
+            file=sys.stderr,
+        )
+
     if not has_context_dir('.'):
         print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
@@ -455,19 +461,10 @@ def find_context(task: str, target: str | None = None, inject: bool = False, roo
         root = _find_git_root(os.getcwd())
         expiry = None
 
-    savings_note = ''
-    try:
-        from cram.benchmark import _count_repo_tokens
-        repo_tokens, _ = _count_repo_tokens(root)
-        if repo_tokens > tokens:
-            pct = int((1 - tokens / repo_tokens) * 100)
-            savings_note = f' · {pct}% less than full repo'
-    except Exception:
-        pass
-
-    print(f"\n✓ Context ready — ~{tokens:,} tokens{savings_note}")
+    print(f"\n✓ Context ready — ~{tokens:,} tokens")
     if not (target and target != 'claude') and not inject:
         print(f'  Call get_context("{task}") via the cram-ai MCP server to load it.')
+    print("  Run `cram audit` to measure orientation tax on your real sessions.")
     if expiry:
         print(f"  Context resets on commit after {expiry} "
               f"(run `cram continue` to extend)")
@@ -494,7 +491,7 @@ def main() -> None:
     parser.add_argument(
         '--inject',
         action='store_true',
-        help='Write task content into CLAUDE.md instead of the MCP pointer (backward compat).',
+        help='[DEPRECATED] Write task content into CLAUDE.md. MCP delivery is the supported path. See README.',
     )
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
