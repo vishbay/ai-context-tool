@@ -11,7 +11,13 @@ import collections
 
 READ_TOOLS  = frozenset({'Read', 'read_file'})
 WRITE_TOOLS = frozenset({'Write', 'Edit', 'edit_file', 'write_file', 'NotebookEdit'})
-BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ')
+BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ',
+                  'nl ',   # number lines — Codex's preferred file viewer
+                  'sed ',  # sed -n '..p' pattern used by Codex to read ranges
+                  'rg ',   # ripgrep
+                  'ag ',   # the_silver_searcher
+                  'awk ',  # read/extract
+                  )
 
 # ── Cursor tool names ─────────────────────────────────────────────────────────
 CURSOR_READ_TOOLS = frozenset({
