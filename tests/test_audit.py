@@ -13,6 +13,7 @@ from cram.audit import (
     _analyze_transcript, _find_all_tool_use, collect_audit, ratio_band,
     AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE,
     _analyze_cursor_transcript, _analyze_cursor_workspace_db,
+    _analyze_codex_transcript,
 )
 
 
@@ -829,4 +830,253 @@ class TestCollectAuditWithCursor:
         assert data is not None
         assert data['sessions'] == 2
         # claude: rbe=1, cursor: rbe=2 → avg=1.5
+        assert abs(data['avg_reads_before_edit'] - 1.5) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Codex transcript tests
+# ---------------------------------------------------------------------------
+
+def _write_codex_jsonl(path: str, session_cwd: str, events: list[dict]) -> None:
+    """Write a minimal Codex JSONL session file."""
+    with open(path, 'w') as f:
+        # session_meta header
+        f.write(json.dumps({
+            'type': 'session_meta',
+            'payload': {'cwd': session_cwd},
+        }) + '\n')
+        for ev in events:
+            f.write(json.dumps(ev) + '\n')
+
+
+def _exec_cmd(cmd: str, workdir: str = '') -> dict:
+    return {
+        'type': 'response_item',
+        'payload': {
+            'type': 'function_call',
+            'name': 'exec_command',
+            'arguments': json.dumps({'cmd': cmd, 'workdir': workdir}),
+        },
+    }
+
+
+def _apply_patch(patch_text: str) -> dict:
+    return {
+        'type': 'response_item',
+        'payload': {
+            'type': 'custom_tool_call',
+            'name': 'apply_patch',
+            'input': patch_text,
+        },
+    }
+
+
+def _token_count(input_tokens: int, cached_input_tokens: int = 0, output_tokens: int = 0) -> dict:
+    return {
+        'type': 'event_msg',
+        'payload': {
+            'type': 'token_count',
+            'info': {
+                'last_token_usage': {
+                    'input_tokens': input_tokens,
+                    'cached_input_tokens': cached_input_tokens,
+                    'output_tokens': output_tokens,
+                },
+            },
+        },
+    }
+
+
+class TestCodexTranscript:
+    def test_counts_reads_and_edits(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _exec_cmd(f'cat {repo}/b.py', repo),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['reads'] == 2
+        assert r['edits'] == 1
+        assert r['reads_before_edit'] == 2
+
+    def test_reads_after_first_edit_not_in_reads_before_edit(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+            _exec_cmd(f'cat {repo}/b.py', repo),  # post-edit read
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['reads'] == 2
+        assert r['reads_before_edit'] == 1
+
+    def test_filters_other_repo_events(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        other = str(tmp_path / 'other')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {other}/a.py', other),   # different workdir
+            _apply_patch(f'*** Update File: {other}/a.py\n--- old\n+++ new\n'),
+        ])
+        # session_cwd is repo but all activity is in other
+        r = _analyze_codex_transcript(path, repo)
+        # reads=0, edits=0 → returns None
+        assert r is None
+
+    def test_returns_none_when_no_relevant_activity(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [])
+        assert _analyze_codex_transcript(path, repo) is None
+
+    def test_token_fields_populated_from_token_count(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _token_count(input_tokens=1000, cached_input_tokens=200, output_tokens=50),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['cache_reads'] == 200
+        assert r['requests'] == 1
+        assert r['avg_context_per_request'] == 1200  # 1000 + 200
+        assert r['avg_output_tokens'] == 50.0
+
+    def test_context_growth_factor(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _token_count(input_tokens=500),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+            _token_count(input_tokens=2000),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        # growth = 2000 / 500 = 4.0
+        assert abs(r['context_growth_factor'] - 4.0) < 0.01
+
+    def test_edit_churn_counted(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        file_a = f'{repo}/a.py'
+        _write_codex_jsonl(path, repo, [
+            _apply_patch(f'*** Update File: {file_a}\n--- old\n+++ new1\n'),
+            _apply_patch(f'*** Update File: {file_a}\n--- old\n+++ new2\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['edit_churn'] == 1  # file edited twice: churn = 2 - 1 = 1
+
+    def test_add_file_patch_counted_as_edit(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _apply_patch(f'*** Add File: {repo}/new.py\n+++ content\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['edits'] == 1
+
+    def test_arguments_as_dict_not_string(self, tmp_path):
+        """Verify parser doesn't crash when arguments is already a dict (defensive)."""
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        with open(path, 'w') as f:
+            f.write(json.dumps({'type': 'session_meta', 'payload': {'cwd': repo}}) + '\n')
+            f.write(json.dumps({
+                'type': 'response_item',
+                'payload': {
+                    'type': 'function_call',
+                    'name': 'exec_command',
+                    'arguments': {'cmd': f'cat {repo}/a.py', 'workdir': repo},
+                },
+            }) + '\n')
+            f.write(json.dumps({
+                'type': 'response_item',
+                'payload': {
+                    'type': 'custom_tool_call',
+                    'name': 'apply_patch',
+                    'input': f'*** Update File: {repo}/a.py\n--- old\n+++ new\n',
+                },
+            }) + '\n')
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['reads'] == 1
+
+    def test_missing_file_returns_none(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        assert _analyze_codex_transcript(str(tmp_path / 'nonexistent.jsonl'), repo) is None
+
+    def test_source_field_is_codex(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['source'] == 'codex'
+
+
+class TestCollectAuditWithCodex:
+    def test_codex_sessions_included_when_no_claude_transcripts(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+
+        repo = str(tmp_path / 'repo')
+        sessions_dir = tmp_path / 'codex-sessions'
+        sessions_dir.mkdir()
+        path = str(sessions_dir / 'session.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _exec_cmd(f'cat {repo}/b.py', repo),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+        ])
+
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir', lambda r: None)
+        monkeypatch.setattr(_audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(_audit_mod, '_codex_sessions_dir', lambda: str(sessions_dir))
+
+        data = _audit_mod.collect_audit(repo, days=365)
+        assert data is not None
+        assert data['sessions'] == 1
+        assert data['avg_reads_before_edit'] == 2.0
+
+    def test_codex_sessions_merged_with_claude_sessions(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+
+        repo = str(tmp_path / 'repo')
+
+        claude_dir = tmp_path / 'claude'
+        claude_dir.mkdir()
+        with open(str(claude_dir / 'claude.jsonl'), 'w') as f:
+            for name, inp in [('Read', {'file_path': repo + '/c.py'}), ('Edit', {})]:
+                f.write(json.dumps({'type': 'tool_use', 'name': name, 'input': inp}) + '\n')
+
+        sessions_dir = tmp_path / 'codex-sessions'
+        sessions_dir.mkdir()
+        codex_path = str(sessions_dir / 'session.jsonl')
+        _write_codex_jsonl(codex_path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _exec_cmd(f'cat {repo}/b.py', repo),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- old\n+++ new\n'),
+        ])
+
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda r: str(claude_dir))
+        monkeypatch.setattr(_audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(_audit_mod, '_codex_sessions_dir', lambda: str(sessions_dir))
+
+        data = _audit_mod.collect_audit(repo, days=365)
+        assert data is not None
+        assert data['sessions'] == 2
+        # claude: rbe=1, codex: rbe=2 → avg=1.5
         assert abs(data['avg_reads_before_edit'] - 1.5) < 0.01

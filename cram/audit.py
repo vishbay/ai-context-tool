@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 import os
+import re
 import glob
 import datetime
 import collections
@@ -533,6 +534,202 @@ def _collect_cursor_sessions(repo_root: str, cutoff: datetime.datetime) -> list[
     return sessions
 
 
+# ── Codex support ─────────────────────────────────────────────────────────────
+
+# Patterns in exec_command.cmd that indicate a read operation.
+# Codex routes all shell activity through exec_command, so we match on cmd text.
+_CODEX_WRITE_PATCH_RE = re.compile(
+    r'^\*{3}\s+(Add File|Update File|Delete File):\s*(.+)$',
+    re.MULTILINE,
+)
+
+
+def _codex_sessions_dir() -> str | None:
+    """Return ~/.codex/sessions/ if it exists."""
+    path = os.path.join(os.path.expanduser('~'), '.codex', 'sessions')
+    return path if os.path.isdir(path) else None
+
+
+def _analyze_codex_transcript(path: str, repo_root: str) -> dict | None:
+    """Parse a Codex JSONL session file and return a session dict.
+
+    Codex routes all shell activity through ``exec_command`` (a function_call)
+    and file writes through ``apply_patch`` (a custom_tool_call).  Token usage
+    comes from ``event_msg/token_count`` events.
+
+    The session is associated with ``repo_root`` via ``session_meta.cwd`` or
+    the ``workdir`` field of individual exec_command calls.  Returns None if no
+    relevant activity is found.
+    """
+    reads = 0
+    reads_before_edit = 0
+    edits = 0
+    first_edit_seen = False
+    read_counts: dict[str, str] = {}   # cmd → dummy (just tracking distinct reads)
+    edit_counts: dict[str, int] = {}   # file_path → edit count
+
+    cache_writes = 0
+    cache_reads = 0
+    ctx_per_req: list[int] = []
+    output_per_req: list[int] = []
+    error_results = 0
+
+    session_cwd: str = ''
+    repo_sep = repo_root.rstrip(os.sep) + os.sep
+
+    def _is_repo(workdir: str) -> bool:
+        return workdir == repo_root or workdir.startswith(repo_sep)
+
+    try:
+        with open(path, errors='ignore') as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                t = obj.get('type', '')
+                p = obj.get('payload', {})
+                if not isinstance(p, dict):
+                    continue
+
+                if t == 'session_meta':
+                    session_cwd = p.get('cwd', '') or ''
+
+                # ── per-request token usage ────────────────────────────────
+                if t == 'event_msg' and p.get('type') == 'token_count':
+                    last = (p.get('info') or {}).get('last_token_usage') or {}
+                    inp  = last.get('input_tokens', 0)
+                    cached = last.get('cached_input_tokens', 0)
+                    out  = last.get('output_tokens', 0)
+                    cache_reads += cached
+                    ctx_per_req.append(inp + cached)
+                    output_per_req.append(out)
+                    continue
+
+                if t != 'response_item':
+                    continue
+
+                pt = p.get('type', '')
+
+                # ── exec_command → reads (and occasionally writes) ─────────
+                if pt == 'function_call' and p.get('name') == 'exec_command':
+                    args_raw = p.get('arguments', '')
+                    try:
+                        args = (json.loads(args_raw)
+                                if isinstance(args_raw, str) else args_raw) or {}
+                    except Exception:
+                        args = {}
+                    cmd     = args.get('cmd', '')     if isinstance(args, dict) else ''
+                    workdir = args.get('workdir', '') if isinstance(args, dict) else ''
+                    wd      = workdir or session_cwd
+
+                    if not _is_repo(wd):
+                        continue
+
+                    is_read = any(c in cmd for c in BASH_READ_CMDS)
+                    if is_read:
+                        reads += 1
+                        if not first_edit_seen:
+                            reads_before_edit += 1
+
+                # ── apply_patch → writes ───────────────────────────────────
+                elif pt == 'custom_tool_call' and p.get('name') == 'apply_patch':
+                    patch_text = p.get('input', '')
+                    files_in_patch: list[str] = []
+                    for m in _CODEX_WRITE_PATCH_RE.finditer(str(patch_text)):
+                        fp = m.group(2).strip()
+                        if fp:
+                            files_in_patch.append(fp)
+
+                    # If the patch names explicit paths, require at least one in repo.
+                    # Fall back to session_cwd only when no paths are parseable.
+                    if files_in_patch:
+                        if not any(fp == repo_root or fp.startswith(repo_sep)
+                                   for fp in files_in_patch):
+                            continue
+                    elif not _is_repo(session_cwd):
+                        continue
+
+                    edits += 1
+                    if not first_edit_seen:
+                        first_edit_seen = True
+                    for fp in files_in_patch:
+                        edit_counts[fp] = edit_counts.get(fp, 0) + 1
+
+                # ── failed exec outputs ────────────────────────────────────
+                elif pt == 'function_call_output':
+                    out = p.get('output', '')
+                    # Exit codes > 1 in exec output indicate genuine tool failures
+                    # (code 1 is common for grep-no-match, so we skip it)
+                    if isinstance(out, str) and 'Process exited with code' in out:
+                        for code in range(2, 128):
+                            if f'code {code}' in out:
+                                error_results += 1
+                                break
+
+    except Exception:
+        return None
+
+    # Reject session if cwd doesn't match repo_root and we have no other signal
+    if session_cwd and not _is_repo(session_cwd) and reads == 0 and edits == 0:
+        return None
+    if reads == 0 and edits == 0:
+        return None
+
+    requests  = len(ctx_per_req)
+    total_ctx = sum(ctx_per_req)
+    tail_share = (
+        sum(ctx_per_req[2 * requests // 3:]) / total_ctx
+        if requests >= 6 and total_ctx else None
+    )
+    first_ctx = ctx_per_req[0] if ctx_per_req else 0
+    context_growth_factor = (
+        max(ctx_per_req) / first_ctx if requests >= 2 and first_ctx else None
+    )
+
+    ratio = reads_before_edit / max(edits, 1)
+    return {
+        'reads':                   reads,
+        'reads_before_edit':       reads_before_edit,
+        'edits':                   edits,
+        'ratio':                   ratio,
+        'cache_writes':            cache_writes,
+        'cache_reads':             cache_reads,
+        'requests':                requests,
+        'avg_context_per_request': total_ctx / requests if requests else 0.0,
+        'peak_context':            max(ctx_per_req) if ctx_per_req else 0,
+        'first_context':           first_ctx,
+        'context_growth_factor':   context_growth_factor,
+        'avg_output_tokens':       sum(output_per_req) / len(output_per_req) if output_per_req else 0.0,
+        'tail_share':              tail_share,
+        'big_results':             0,
+        'carried_read_tokens':     0,
+        'redundant_reads':         0,
+        'error_results':           error_results,
+        'edit_churn':              sum(c - 1 for c in edit_counts.values() if c > 1),
+        'mtime':                   os.path.getmtime(path),
+        'source':                  'codex',
+    }
+
+
+def _collect_codex_sessions(repo_root: str, cutoff: datetime.datetime) -> list[dict]:
+    """Return Codex session dicts for repo_root since cutoff."""
+    sd = _codex_sessions_dir()
+    if not sd:
+        return []
+    sessions: list[dict] = []
+    for path in glob.glob(os.path.join(sd, '**', '*.jsonl'), recursive=True):
+        if datetime.datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
+            continue
+        r = _analyze_codex_transcript(path, repo_root)
+        if r:
+            sessions.append(r)
+    return sessions
+
+
 def _project_transcript_dir(repo_root: str) -> str | None:
     """Return the ~/.claude/projects/ subdirectory for this repo, or None."""
     dashed = repo_root.replace(os.sep, '-').lstrip('-')
@@ -599,17 +796,24 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
         project_summaries.append((name, len(sessions), avg_reads, avg_rbe, avg_cw))
 
     # Append Cursor sessions for single-repo mode.
-    # --all skips Cursor (no per-project grouping available yet).
+    # --all skips Cursor/Codex (no per-project grouping available yet).
     if not all_projects:
         cursor_sessions = _collect_cursor_sessions(repo_root, cutoff)
         if cursor_sessions:
             all_sessions.extend(cursor_sessions)
-            # Surface as a project entry so it shows in the per-project breakdown.
             avg_reads = sum(s['reads'] for s in cursor_sessions) / len(cursor_sessions)
             avg_rbe   = sum(s['reads_before_edit'] for s in cursor_sessions) / len(cursor_sessions)
-            avg_cw    = 0.0
             project_summaries.append(
-                ('cursor', len(cursor_sessions), avg_reads, avg_rbe, avg_cw)
+                ('cursor', len(cursor_sessions), avg_reads, avg_rbe, 0.0)
+            )
+
+        codex_sessions = _collect_codex_sessions(repo_root, cutoff)
+        if codex_sessions:
+            all_sessions.extend(codex_sessions)
+            avg_reads = sum(s['reads'] for s in codex_sessions) / len(codex_sessions)
+            avg_rbe   = sum(s['reads_before_edit'] for s in codex_sessions) / len(codex_sessions)
+            project_summaries.append(
+                ('codex', len(codex_sessions), avg_reads, avg_rbe, 0.0)
             )
 
     if not all_sessions:
