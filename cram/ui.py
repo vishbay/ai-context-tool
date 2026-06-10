@@ -289,8 +289,10 @@ def _build_app(root: str):  # noqa: ANN202
             body = self.query_one('#audit-body', Static)
             if data is None:
                 body.update(
-                    '[dim]No Claude Code sessions found for this repo in the last '
-                    '30 days.\nTranscripts are read from ~/.claude/projects/.[/dim]'
+                    '[dim]No sessions found for this repo in the last 30 days.\n'
+                    'Checks: ~/.claude/projects/ (Claude Code), '
+                    '~/.cursor/agent-transcripts/ (Cursor), '
+                    '~/.codex/sessions/ (Codex)[/dim]'
                 )
                 return
 
@@ -393,6 +395,21 @@ def _build_app(root: str):  # noqa: ANN202
                 lines.append(
                     f'  Same-file re-edits/session {data["avg_edit_churn"]:.1f}'
                 )
+
+            projects = data.get('projects') or []
+            if projects:
+                lines += ['', '[b]By source[/b]']
+                for src, n, avg_r, avg_rbe, avg_cw in projects:
+                    # Claude project entries use a directory path; shorten to 'claude'
+                    if src in ('cursor', 'codex'):
+                        src_label = src
+                    else:
+                        src_label = 'claude'
+                    lines.append(
+                        f'  {src_label:<12}  {n} session{"s" if n != 1 else ""}  '
+                        f'reads/session {avg_r:.1f}  rbe {avg_rbe:.1f}'
+                        + (f'  cache {avg_cw:,.0f} tok' if avg_cw else '')
+                    )
 
             if data['weekly']:
                 lines += ['', '[b]Trend — reads before first edit (weekly avg)[/b]']
