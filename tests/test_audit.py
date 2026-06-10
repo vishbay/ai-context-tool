@@ -359,6 +359,55 @@ class TestRetryLoops:
         assert data['sessions_with_errors'] == 1
 
 
+class TestRunCompare:
+    """cram audit --compare — side-by-side A/B view for the P0 experiment."""
+
+    def _setup_two_repos(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+        td_a = tmp_path / 'transcripts' / 'repo-a'
+        td_b = tmp_path / 'transcripts' / 'repo-b'
+        td_a.mkdir(parents=True)
+        td_b.mkdir(parents=True)
+        # A: heavy orientation (4 reads before edit). B: light (1 read).
+        _write_transcript(str(td_a / 's.jsonl'),
+                          [('Read', {})] * 4 + [('Edit', {})])
+        _write_transcript(str(td_b / 's.jsonl'),
+                          [('Read', {}), ('Edit', {})])
+        repo_a = str(tmp_path / 'repo-a')
+        repo_b = str(tmp_path / 'repo-b')
+        mapping = {repo_a: str(td_a), repo_b: str(td_b)}
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda root: mapping.get(root))
+        return repo_a, repo_b
+
+    def test_compare_prints_both_columns_and_delta(self, tmp_path, monkeypatch, capsys):
+        from cram.audit import run_compare
+        repo_a, repo_b = self._setup_two_repos(tmp_path, monkeypatch)
+        run_compare(repo_a, repo_b, days=365)
+        out = capsys.readouterr().out
+        assert 'repo-a' in out and 'repo-b' in out
+        assert 'Reads before first edit' in out
+        # A=4.0, B=1.0 → Δ=-3.0, -75%
+        assert '-3.0' in out
+        assert '-75%' in out
+
+    def test_compare_json_contains_both_arms(self, tmp_path, monkeypatch, capsys):
+        from cram.audit import run_compare
+        repo_a, repo_b = self._setup_two_repos(tmp_path, monkeypatch)
+        run_compare(repo_a, repo_b, days=365, as_json=True)
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed['a']['data']['avg_reads_before_edit'] == 4.0
+        assert parsed['b']['data']['avg_reads_before_edit'] == 1.0
+
+    def test_compare_missing_arm_reports_cleanly(self, tmp_path, monkeypatch, capsys):
+        import cram.audit as _audit_mod
+        from cram.audit import run_compare
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir', lambda root: None)
+        run_compare(str(tmp_path / 'x'), str(tmp_path / 'y'), days=30)
+        out = capsys.readouterr().out
+        assert 'No sessions found' in out
+
+
 class TestFindAllToolUse:
     def test_finds_top_level(self):
         obj = {'type': 'tool_use', 'name': 'Read', 'input': {}}

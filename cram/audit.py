@@ -445,9 +445,75 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
     print("  Then compare: run this command again next week.")
 
 
+def _resolve_root(path: str) -> str:
+    from cram.utils import find_git_root
+    start = os.path.abspath(path)
+    try:
+        return find_git_root(start)
+    except Exception:
+        return start
+
+
+# Rows for the side-by-side comparison: (label, summary key, format).
+_COMPARE_ROWS = [
+    ('Sessions analysed',          'sessions',                '{:.0f}'),
+    ('Reads before first edit ←',  'avg_reads_before_edit',   '{:.1f}'),
+    ('Read-to-edit ratio',         'avg_ratio',               '{:.1f}'),
+    ('Edits/session',              'avg_edits',               '{:.1f}'),
+    ('Cache writes/session',       'avg_cache_writes',        '{:,.0f}'),
+    ('Cache reads/session',        'avg_cache_reads',         '{:,.0f}'),
+    ('Requests/session',           'avg_requests',            '{:.0f}'),
+    ('Context/request',            'avg_context_per_request', '{:,.0f}'),
+    ('Redundant re-reads',         'avg_redundant_reads',     '{:.1f}'),
+    ('Failed tool calls/session',  'avg_error_results',       '{:.1f}'),
+    ('Same-file re-edits/session', 'avg_edit_churn',          '{:.1f}'),
+]
+
+
+def run_compare(path_a: str, path_b: str, days: int = 30,
+                as_json: bool = False) -> None:
+    """Side-by-side audit of two checkouts — the P0 attribution experiment view.
+
+    A is the treatment arm (context wiring on), B the control, by convention;
+    the output is symmetric so the order only affects the delta sign.
+    """
+    root_a, root_b = _resolve_root(path_a), _resolve_root(path_b)
+    data_a = collect_audit(root_a, days=days)
+    data_b = collect_audit(root_b, days=days)
+
+    if as_json:
+        print(json.dumps({
+            'days': days,
+            'a': {'path': root_a, 'data': data_a},
+            'b': {'path': root_b, 'data': data_b},
+        }, indent=2))
+        return
+
+    for root, data in ((root_a, data_a), (root_b, data_b)):
+        if data is None:
+            print(f"No sessions found for {root} in the last {days} days.")
+            return
+
+    name_a = os.path.basename(root_a.rstrip(os.sep))[:18] or root_a
+    name_b = os.path.basename(root_b.rstrip(os.sep))[:18] or root_b
+
+    print(f"\nAudit comparison — last {days} days  (Δ = B − A)\n")
+    print(f"  {'Metric':<28} {name_a:>18} {name_b:>18} {'Δ':>12} {'Δ%':>8}")
+    print(f"  {'-' * 28} {'-' * 18} {'-' * 18} {'-' * 12} {'-' * 8}")
+    for label, key, fmt in _COMPARE_ROWS:
+        va, vb = data_a[key], data_b[key]
+        delta = vb - va
+        pct = f'{delta / va * 100:+.0f}%' if va else '—'
+        print(f"  {label:<28} {fmt.format(va):>18} {fmt.format(vb):>18} "
+              f"{fmt.format(delta) if delta >= 0 else '-' + fmt.format(-delta):>12} {pct:>8}")
+    print()
+    print("  ← primary metric. Negative Δ on reads-before-first-edit means B")
+    print("    (second path) oriented faster. Compare distributions, not just")
+    print("    means, before drawing conclusions — a few long sessions dominate.")
+
+
 def main() -> None:
     import argparse
-    from cram.utils import find_git_root
 
     parser = argparse.ArgumentParser(
         prog='cram audit',
@@ -459,14 +525,19 @@ def main() -> None:
                         help='Show all projects, not just this repo')
     parser.add_argument('--json', action='store_true', dest='as_json',
                         help='Emit structured JSON instead of the text report')
+    parser.add_argument('--compare', nargs=2, metavar=('PATH_A', 'PATH_B'),
+                        default=None,
+                        help='Compare two checkouts side by side '
+                             '(P0 attribution experiment)')
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
 
-    start = os.path.abspath(args.path) if args.path else os.getcwd()
-    try:
-        root = find_git_root(start)
-    except Exception:
-        root = start
+    if args.compare:
+        run_compare(args.compare[0], args.compare[1],
+                    days=args.days, as_json=args.as_json)
+        return
+
+    root = _resolve_root(args.path) if args.path else _resolve_root(os.getcwd())
 
     run_audit(root, days=args.days, all_projects=args.all_projects, as_json=args.as_json)
 

@@ -298,7 +298,12 @@ cram audit           # last 30 days for this repo
 cram audit --days 7  # tighter window
 cram audit --all     # all projects
 cram audit --json    # structured output for dashboards / scripts
+cram audit --compare PATH_A PATH_B   # side-by-side A/B of two checkouts
 ```
+
+`--compare` prints both checkouts' metrics with deltas — built for attribution
+experiments: keep one checkout wired with cram, one plain, alternate tasks between
+them, and compare after a couple of weeks.
 
 Output includes:
 

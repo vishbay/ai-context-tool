@@ -38,8 +38,10 @@ remediation among several.** The pivot is mostly deletion and re-framing, not a 
 
 ### P0 — The attribution experiment (validates everything else)
 Two weeks of real work. Alternate tasks with/without `get_context()`, session
-discipline held constant. `cram audit` before/after per cohort. This is the number
-the pivot stands on. **Do this before building more.**
+discipline held constant. This is the number the pivot stands on.
+**Tooling ready (2026-06-10):** `cram audit --compare PATH_A PATH_B`; control
+checkout at `~/cram-ai-control` (wiring neutralized via skip-worktree); protocol
+and task log in `~/SideQuests/p0-experiment-log.md`. **Remaining: run it.**
 
 ### P1 — Deepen the audit (buckets 2–5)
 - ~~Extend `cram/audit.py`: context-per-request, read-cost tail share, carried cost of
