@@ -110,13 +110,13 @@ def main() -> None:
     if repo:
         hooks = os.path.join(repo, '.git', 'hooks')
         pc  = os.path.exists(os.path.join(hooks, 'post-commit'))
-        pco = os.path.exists(os.path.join(hooks, 'post-checkout'))
-        if pc and pco:
-            _row(True, 'git hooks', 'post-commit + post-checkout installed')
+        cm  = os.path.exists(os.path.join(hooks, 'commit-msg'))
+        if pc and cm:
+            _row(True, 'git hooks', 'post-commit + commit-msg installed')
             _detail('ARCHITECTURE.md and SYMBOLS.md auto-update on every commit')
         elif pc:
-            _row(None, 'git hooks', 'post-commit only — re-run `cram init` to add post-checkout')
-            _detail('context updates on commit but not on branch switch')
+            _row(None, 'git hooks', 'post-commit only — re-run `cram hook install` to add commit-msg')
+            _detail('decision-language prompts on commit are disabled')
         else:
             _row(None, 'git hooks not installed', 'run `cram hook install` to enable auto-sync on commit')
             _detail('without hooks, run `cram sync` manually after making changes')
@@ -150,15 +150,6 @@ def main() -> None:
                 _row(True, 'other detected models', ', '.join(all_models))
     except Exception as exc:
         _row(None, f'model discovery error: {exc}')
-
-    # ── tray deps (optional) ──────────────────────────────────────
-    print()
-    try:
-        import pystray, webview  # noqa: F401
-        _row(True, 'tray deps', 'pystray + webview')
-    except ImportError:
-        _row(None, 'tray app not installed',
-             "optional — pip install 'cram-ai[tray]' for the menu bar app")
 
     # ── summary ───────────────────────────────────────────────────
     print()

@@ -8,6 +8,7 @@ import pytest
 from cram.find_context import (
     _clean_path,
     _read_truncated,
+    _resolve_path,
     _score_files,
     find_relevant_files,
     populate_current_task,
@@ -85,7 +86,7 @@ class TestReadTruncated:
 class TestFindRelevantFiles:
     def test_returns_cleaned_file_paths(self):
         mock_response = 'src/main.py\ncram/utils.py\n'
-        with patch('cram.find_context.call_model', return_value=mock_response):
+        with patch('cram.find_context.call_context_model', return_value=mock_response):
             result = find_relevant_files('add feature', '# Arch', '# Decisions')
         paths = [f for f, _ in result]
         assert 'src/main.py' in paths
@@ -97,7 +98,7 @@ class TestFindRelevantFiles:
             'src/main.py\n'
             '- cram/utils.py\n'
         )
-        with patch('cram.find_context.call_model', return_value=mock_response):
+        with patch('cram.find_context.call_context_model', return_value=mock_response):
             result = find_relevant_files('add feature', '', '')
         paths = [f for f, _ in result]
         assert 'src/main.py' in paths
@@ -108,12 +109,12 @@ class TestFindRelevantFiles:
         import cram.find_context as fc
         monkeypatch.setattr(fc, 'MAX_FILES', 2)
         mock_response = 'a/b.py\nc/d.py\ne/f.py\ng/h.py'
-        with patch('cram.find_context.call_model', return_value=mock_response):
+        with patch('cram.find_context.call_context_model', return_value=mock_response):
             result = find_relevant_files('task', '', '')
         assert len(result) <= 2
 
     def test_passes_task_and_arch_to_model(self):
-        with patch('cram.find_context.call_model', return_value='src/a.py') as mock_call:
+        with patch('cram.find_context.call_context_model', return_value='src/a.py') as mock_call:
             find_relevant_files('my task', '# Arch content', '# Dec content')
         prompt = mock_call.call_args[0][0]
         assert 'my task' in prompt
@@ -122,14 +123,14 @@ class TestFindRelevantFiles:
     def test_decisions_excluded_from_selection_prompt(self):
         # DECISIONS don't help pick files — keep them out of the selection prompt
         decisions = 'use postgres for all persistence'
-        with patch('cram.find_context.call_model', return_value='src/a.py') as mock_call:
+        with patch('cram.find_context.call_context_model', return_value='src/a.py') as mock_call:
             find_relevant_files('add auth', '# Arch', decisions, symbols='auth.py: login, logout')
         prompt = mock_call.call_args[0][0]
         assert decisions not in prompt
 
     def test_scored_candidates_appear_as_hint_in_prompt(self):
         symbols = 'cram/find_context.py: find_relevant_files, populate_current_task\n'
-        with patch('cram.find_context.call_model', return_value='cram/find_context.py') as mock_call:
+        with patch('cram.find_context.call_context_model', return_value='cram/find_context.py') as mock_call:
             find_relevant_files('fix find context pipeline', '# Arch', '', symbols=symbols)
         prompt = mock_call.call_args[0][0]
         assert 'Top candidates' in prompt
@@ -137,12 +138,20 @@ class TestFindRelevantFiles:
 
     def test_full_index_used_when_no_keyword_matches(self):
         symbols = 'utils.py: parse, format\nmodels.py: User, Post\n'
-        with patch('cram.find_context.call_model', return_value='utils.py') as mock_call:
+        with patch('cram.find_context.call_context_model', return_value='utils.py') as mock_call:
             # Task keywords ('zzz') won't match anything
             find_relevant_files('zzz yyy xxx', '# Arch', '', symbols=symbols)
         prompt = mock_call.call_args[0][0]
         assert 'Symbol index' in prompt
         assert 'utils.py' in prompt
+
+    def test_uses_call_context_model_not_call_model(self):
+        """A2: find_relevant_files must invoke call_context_model, not call_model."""
+        with patch('cram.find_context.call_context_model', return_value='src/a.py') as ctx_mock, \
+             patch('cram.find_context.call_model') as plain_mock:
+            find_relevant_files('any task', '# Arch', '')
+        assert ctx_mock.called, 'call_context_model should have been called'
+        assert not plain_mock.called, 'call_model should NOT be called by find_relevant_files'
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +374,7 @@ class TestFindContext:
         (tmp_path / '.ai-context').mkdir()
         # No ARCHITECTURE.md created — should warn but not crash
 
-        with patch('cram.find_context.call_model', return_value=''):
+        with patch('cram.find_context.call_context_model', return_value=''):
             find_context('some task')
 
         assert 'Warning' in capsys.readouterr().err
@@ -378,12 +387,104 @@ class TestFindContext:
         (ctx / 'DECISIONS.md').write_text('# Dec')
         (tmp_path / 'main.py').write_text('print("hello")\n')
 
-        with patch('cram.find_context.call_model', return_value='main.py'):
+        with patch('cram.find_context.call_context_model', return_value='main.py'):
             find_context('fix the print')
 
         content = (ctx / 'CURRENT_TASK.md').read_text()
         assert 'fix the print' in content
         assert 'print("hello")' in content
+
+
+# ---------------------------------------------------------------------------
+# A5: chdir-free extraction — excerpts work from any cwd
+# ---------------------------------------------------------------------------
+
+class TestChdirFreeExtraction:
+    def test_get_context_works_from_different_cwd(self, tmp_path, monkeypatch):
+        """A5: populate_current_task resolves files via root, not cwd."""
+        import cram.mcp_server as srv
+        from unittest.mock import patch as _patch
+
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        (ctx / 'ARCHITECTURE.md').write_text('# Arch\n')
+        (ctx / 'DECISIONS.md').write_text('# Dec\n')
+        (ctx / 'GOTCHAS.md').write_text('# Got\n')
+        (ctx / 'SYMBOLS.md').write_text('main.py: main\n')
+        (tmp_path / 'main.py').write_text('def main(): pass\n')
+
+        monkeypatch.setattr(srv, '_repo_root', str(tmp_path))
+        # Deliberately change to a completely different directory
+        monkeypatch.chdir('/')
+
+        entries = [('main.py', ['main'])]
+        with _patch('cram.find_context.find_relevant_files', return_value=entries):
+            result = srv.get_context('test task from root cwd')
+
+        assert 'test task from root cwd' in result
+        assert 'main' in result  # excerpt content made it in
+
+    def test_populate_current_task_uses_root_kwarg(self, tmp_path):
+        """populate_current_task(root=X) finds files without os.chdir."""
+        import cram.find_context as fc
+
+        ctx = tmp_path / '.ai-context'
+        ctx.mkdir()
+        (tmp_path / 'utils.py').write_text('def parse(): pass\ndef fmt(): pass\n')
+        out = tmp_path / '.ai-context' / 'CURRENT_TASK.md'
+
+        fc.populate_current_task(
+            'test task',
+            [('utils.py', ['parse'])],
+            output_path=str(out),
+            root=str(tmp_path),
+        )
+
+        content = out.read_text()
+        assert 'test task' in content
+        assert 'utils.py' in content
+        assert 'parse' in content
+
+
+# ---------------------------------------------------------------------------
+# A6: _resolve_path basename disambiguation
+# ---------------------------------------------------------------------------
+
+class TestResolvePathDisambiguation:
+    def test_single_basename_match_wins(self, tmp_path):
+        """A6: single match by basename is returned even if directory differs."""
+        sub = tmp_path / 'sub'
+        sub.mkdir()
+        (sub / 'utils.py').write_text('pass')
+
+        result = _resolve_path('utils.py', str(tmp_path))
+        assert result == 'sub/utils.py'
+
+    def test_closer_dir_match_preferred(self, tmp_path):
+        """A6: with multiple basename matches, prefer the one whose dir parts overlap the raw path."""
+        # Create two utils.py — one in auth/, one in payments/
+        (tmp_path / 'auth').mkdir()
+        (tmp_path / 'auth' / 'utils.py').write_text('pass')
+        (tmp_path / 'payments').mkdir()
+        (tmp_path / 'payments' / 'utils.py').write_text('pass')
+
+        # raw path hint contains 'auth' — should prefer auth/utils.py
+        result = _resolve_path('auth/utils.py', str(tmp_path))
+        assert result == 'auth/utils.py'
+
+    def test_fully_ambiguous_returns_raw(self, tmp_path):
+        """A6: if still ambiguous after dir-overlap scoring, return raw path unresolved."""
+        # Two utils.py with NO directory hint in the raw path
+        (tmp_path / 'a').mkdir()
+        (tmp_path / 'a' / 'utils.py').write_text('pass')
+        (tmp_path / 'b').mkdir()
+        (tmp_path / 'b' / 'utils.py').write_text('pass')
+
+        result = _resolve_path('utils.py', str(tmp_path))
+        # Both a/utils.py and b/utils.py have equal overlap (zero) with bare 'utils.py'
+        # — should return the raw string rather than silently picking one
+        assert result == 'utils.py'
+
 
     def test_root_param_scopes_path_resolution(self, tmp_path, monkeypatch):
         # Files only exist inside tmp_path; resolving with root=str(tmp_path) should find them
@@ -393,7 +494,7 @@ class TestFindContext:
         (tmp_path / 'util.py').write_text('def helper(): pass\n')
 
         # Without chdir — use explicit root to resolve
-        with patch('cram.find_context.call_model', return_value='util.py'):
+        with patch('cram.find_context.call_context_model', return_value='util.py'):
             result = find_relevant_files('fix helper', '# Arch', root=str(tmp_path))
 
         paths = [f for f, _ in result]
@@ -407,7 +508,7 @@ class TestFindContext:
         (ctx / 'DECISIONS.md').write_text('# Dec')
         (tmp_path / 'main.py').write_text('print("hello")\n')
 
-        with patch('cram.find_context.call_model', return_value='main.py'):
+        with patch('cram.find_context.call_context_model', return_value='main.py'):
             find_context('fix the print')
 
         content = (ctx / 'CURRENT_TASK.md').read_text()

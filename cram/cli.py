@@ -19,12 +19,9 @@ Commands:
   benchmark   [path]                       Show token savings vs full-repo auto-indexing
   status      [path]                       Show .ai-context/ freshness
   doctor      [path]                       Check setup: models, hooks, git, context files
-  vscode      [path] [--force]             Generate .vscode/tasks.json for editor integration
   hook        install|uninstall [path]     Manage the git post-commit hook
   mcp         [--repo PATH]                Start MCP server (stdio) for Claude Code / agents
   ui          [path]                       Launch TUI dashboard (requires cram-ai[tui])
-  menu        [path]                       Launch tray app (requires cram-ai[tray])
-  autostart   on|off|status [path]         Start cram-menu automatically at login (macOS)
 
 --target choices: cursor | claude | copilot | codex | windsurf | all
   Set a default in .ai-context/config.toml:  [task] default_target = "cursor"
@@ -65,18 +62,12 @@ def main() -> None:
         from cram.status import main as _main
     elif cmd == 'doctor':
         from cram.doctor import main as _main
-    elif cmd == 'vscode':
-        from cram.vscode import main as _main
     elif cmd == 'hook':
         from cram.hooks import main as _main
     elif cmd == 'mcp':
         from cram.mcp_server import main as _main
     elif cmd == 'ui':
         from cram.ui import main as _main
-    elif cmd == 'menu':
-        from cram.tray import main as _main
-    elif cmd == 'autostart':
-        from cram.autostart import main as _main
     else:
         print(f"Unknown command: {cmd!r}\n")
         print(USAGE)

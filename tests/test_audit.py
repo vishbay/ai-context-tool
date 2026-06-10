@@ -1,13 +1,14 @@
 """Tests for cram/audit.py — transcript analysis and efficiency metrics."""
 
 from __future__ import annotations
+import io
 import json
 import os
 import tempfile
 
 import pytest
 
-from cram.audit import _analyze_transcript, _find_all_tool_use
+from cram.audit import _analyze_transcript, _find_all_tool_use, AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE
 
 
 def _make_transcript(tool_calls: list[tuple[str, dict]], tmp_path) -> str:
@@ -145,3 +146,78 @@ class TestFindAllToolUse:
         # Should not crash or loop; depth limit returns empty
         result = _find_all_tool_use(obj)
         assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# B5: Module constants (AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE) and caveat output
+# ---------------------------------------------------------------------------
+
+class TestAuditConstants:
+    def test_constants_have_expected_defaults(self):
+        """AUDIT_TOK_PER_FILE defaults to 2500 and AUDIT_BASE_PRICE to Sonnet base."""
+        assert AUDIT_TOK_PER_FILE == 2500
+        assert abs(AUDIT_BASE_PRICE - 3.0 / 1_000_000) < 1e-12
+
+    def test_constants_are_overridable_via_env(self, monkeypatch):
+        """Env vars CRAM_AUDIT_TOK_PER_FILE and CRAM_AUDIT_BASE_PRICE override defaults."""
+        monkeypatch.setenv('CRAM_AUDIT_TOK_PER_FILE', '1000')
+        monkeypatch.setenv('CRAM_AUDIT_BASE_PRICE', '0.000005')
+        # Re-import to pick up env overrides
+        import importlib
+        import cram.audit as _audit_mod
+        importlib.reload(_audit_mod)
+        try:
+            assert _audit_mod.AUDIT_TOK_PER_FILE == 1000
+            assert abs(_audit_mod.AUDIT_BASE_PRICE - 0.000005) < 1e-12
+        finally:
+            importlib.reload(_audit_mod)  # restore defaults
+
+    def test_run_audit_prints_modelled_caveat(self, tmp_path, monkeypatch):
+        """run_audit output contains the modelled-cost caveat line."""
+        from cram.audit import run_audit
+        import cram.audit as _audit_mod
+
+        # Create a minimal transcript with reads+edits
+        td = tmp_path / 'transcripts' / 'cram-ai'
+        td.mkdir(parents=True)
+        transcript = td / 'session.jsonl'
+        calls = [
+            ('Read', {'file_path': 'a.py'}),
+            ('Read', {'file_path': 'b.py'}),
+            ('Edit', {'file_path': 'a.py'}),
+        ]
+        with open(transcript, 'w') as f:
+            for name, inp in calls:
+                f.write(json.dumps({'type': 'tool_use', 'name': name, 'input': inp}) + '\n')
+
+        # Patch _project_transcript_dir to return our tmp transcript dir
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda repo_root: str(td))
+
+        buf = io.StringIO()
+        import sys
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            run_audit(str(tmp_path), days=365)
+        finally:
+            sys.stdout = old_stdout
+
+        output = buf.getvalue()
+        assert 'modelled' in output or 'Modelled' in output or 'reads_before_edit' in output
+        # The caveat note should mention tok/file assumption
+        assert 'tok/file' in output or 'AUDIT_TOK_PER_FILE' in output or '2,500' in output
+
+    def test_analyze_transcript_returns_required_fields(self, tmp_path):
+        """_analyze_transcript returns reads, reads_before_edit, edits, and ratio."""
+        path = str(tmp_path / 'session.jsonl')
+        with open(path, 'w') as f:
+            for name, inp in [('Read', {}), ('Read', {}), ('Edit', {})]:
+                f.write(json.dumps({'type': 'tool_use', 'name': name, 'input': inp}) + '\n')
+
+        r = _analyze_transcript(path)
+        assert r is not None
+        assert r['reads'] == 2
+        assert r['reads_before_edit'] == 2
+        assert r['edits'] == 1
+        assert abs(r['ratio'] - 2.0) < 0.01

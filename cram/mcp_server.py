@@ -19,7 +19,6 @@ import json
 import os
 import re
 import sys
-import threading
 import time
 
 from cram.context_dir import CONTEXT_DIR, context_path, has_context_dir
@@ -35,52 +34,31 @@ except ImportError:
 
 # Resolved at startup — see main()
 _repo_root: str = ''
-# Serializes os.chdir() calls across concurrent tool invocations
-_chdir_lock = threading.Lock()
 
 
 def _task_slug(task: str) -> str:
-    slug = re.sub(r'[^a-z0-9]+', '-', task.lower())[:40].strip('-')
-    return slug or 'unnamed'
+    from cram.session import _task_slug as _slug
+    return _slug(task)
+
+
+def _active_slot_path() -> str | None:
+    """Return the absolute path of the most recently active task slot, or None."""
+    if not _repo_root:
+        return None
+    from cram.session import get_last_slot
+    slug = get_last_slot(_repo_root)
+    if not slug:
+        return None
+    tasks_dir = os.path.join(_repo_root, CONTEXT_DIR, 'tasks')
+    slot = os.path.join(tasks_dir, f'{slug}.md')
+    return slot if os.path.exists(slot) else None
 
 
 def _archive_current_task() -> None:
-    """Append the current CURRENT_TASK.md to TASK_HISTORY.jsonl before it's replaced."""
-    try:
-        current_path = _ctx_path('CURRENT_TASK.md')
-        if not os.path.exists(current_path):
-            return
-        content = open(current_path, errors='ignore').read().strip()
-        if not content or content.startswith('<!-- Session ended'):
-            return
-        # Extract task description
-        task = ''
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if s == '## Task':
-                # Task description is on the next non-blank line
-                for j in range(i + 1, len(lines)):
-                    candidate = lines[j].strip()
-                    if candidate and not candidate.startswith('#'):
-                        task = candidate
-                        break
-                break
-            if s.startswith('# Task:'):
-                task = s[len('# Task:'):].strip()
-                break
-        if not task:
-            return
-        entry = {
-            'ts':   datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'task': task,
-            'slug': _task_slug(task),
-        }
-        history_path = _ctx_path('TASK_HISTORY.jsonl')
-        with open(history_path, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-    except Exception:
-        pass
+    """Archive the active slot (or CURRENT_TASK.md fallback) to TASK_HISTORY.jsonl."""
+    from cram.session import archive_task
+    source = _active_slot_path() or _ctx_path('CURRENT_TASK.md')
+    archive_task(_repo_root, source)
 
 
 def _cleanup_stale_slots(tasks_dir: str, max_age: int = 86400) -> None:
@@ -158,7 +136,13 @@ def get_context(task: str = '') -> str:
         return f'Error: {CONTEXT_DIR}/ not found in {_repo_root}. Run `cram init` first.'
 
     if not task:
-        content = _read('CURRENT_TASK.md')
+        # Try the active slot first; fall back to CURRENT_TASK.md for CLI-only users
+        slot = _active_slot_path()
+        if slot:
+            with open(slot, errors='ignore') as f:
+                content = f.read()
+        else:
+            content = _read('CURRENT_TASK.md')
         if not content:
             return (
                 'No context loaded yet. Call get_context("your task description") '
@@ -186,45 +170,41 @@ def get_context(task: str = '') -> str:
     tasks_dir  = os.path.join(_repo_root, CONTEXT_DIR, 'tasks')
     slot_path  = os.path.join(tasks_dir, f'{slug}.md')
 
-    # Run find_context in the repo directory; lock serializes os.chdir across concurrent calls
-    orig_dir = os.getcwd()
-    with _chdir_lock:
-        try:
-            os.chdir(_repo_root)
-            from cram.find_context import find_relevant_files, populate_current_task
-            from cram.utils import get_model_recommendations
+    # No os.chdir — files are opened via os.path.join(root, relpath) in populate_current_task
+    from cram.find_context import find_relevant_files, populate_current_task
+    from cram.utils import get_model_recommendations
 
-            arch      = _read('ARCHITECTURE.md')
-            decisions = _read('DECISIONS.md')
-            gotchas   = _read('GOTCHAS.md')
-            symbols   = _read('SYMBOLS.md')
+    arch      = _read('ARCHITECTURE.md')
+    decisions = _read('DECISIONS.md')
+    gotchas   = _read('GOTCHAS.md')
+    symbols   = _read('SYMBOLS.md')
 
-            ctx_model, coding_model = get_model_recommendations()
-            file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas,
-                                               root=_repo_root)
+    ctx_model, coding_model = get_model_recommendations()
+    file_entries = find_relevant_files(task, arch, decisions, symbols, gotchas,
+                                       root=_repo_root)
 
-            if not file_entries:
-                return (
-                    f"# Task: {task}\n\n"
-                    "No relevant files identified. "
-                    "Check that ARCHITECTURE.md and SYMBOLS.md describe the repo structure.\n\n"
-                    f"## Architecture\n{arch}"
-                )
+    if not file_entries:
+        return (
+            f"# Task: {task}\n\n"
+            "No relevant files identified. "
+            "Check that ARCHITECTURE.md and SYMBOLS.md describe the repo structure.\n\n"
+            f"## Architecture\n{arch}"
+        )
 
-            os.makedirs(tasks_dir, exist_ok=True)
-            _archive_current_task()
-            populate_current_task(task, file_entries, ctx_model, coding_model,
-                                  output_path=slot_path)
-            _cleanup_stale_slots(tasks_dir)
+    os.makedirs(tasks_dir, exist_ok=True)
+    _archive_current_task()
+    populate_current_task(task, file_entries, ctx_model, coding_model,
+                          output_path=slot_path, root=_repo_root)
+    # Record the active slot so no-arg reload and add_file can find it
+    from cram.session import set_last_slot
+    set_last_slot(_repo_root, slug)
+    _cleanup_stale_slots(tasks_dir)
 
-            with open(slot_path) as f:
-                content = f.read()
+    with open(slot_path) as f:
+        content = f.read()
 
-            _log_usage(task, len(content) // 4, 'generate')
-            return content
-
-        finally:
-            os.chdir(orig_dir)
+    _log_usage(task, len(content) // 4, 'generate')
+    return content
 
 
 @mcp.tool()
@@ -362,8 +342,14 @@ def get_health() -> str:
     if not _repo_root:
         return 'Error: repo root not configured.'
 
-    from cram.health import context_health
-    h = context_health(_repo_root)
+    if not has_context_dir(_repo_root):
+        return f'Error: {CONTEXT_DIR}/ not found in {_repo_root}. Run `cram init` first.'
+
+    try:
+        from cram.health import context_health
+        h = context_health(_repo_root)
+    except Exception as ex:
+        return f'Error reading health data: {ex}. Run `cram doctor` to diagnose.'
 
     band    = h['staleness_band']
     score   = h['staleness_score']
@@ -409,27 +395,28 @@ def add_file(path: str, identifiers: str = '') -> str:
     if not _repo_root:
         return 'Error: repo root not configured.'
 
-    orig_dir = os.getcwd()
-    with _chdir_lock:
-        try:
-            os.chdir(_repo_root)
-            import io
-            from contextlib import redirect_stdout
-            from cram.add_context import add_files
+    # No os.chdir — add_files receives explicit task_path_override and resolves
+    # relative file paths itself (via _resolve_path which accepts root).
+    import io
+    from contextlib import redirect_stdout
+    from cram.add_context import add_files
 
-            spec = f'{path} | {identifiers}' if identifiers.strip() else path
-            buf  = io.StringIO()
-            with redirect_stdout(buf):
-                ok = add_files([spec], replace=False)
+    # Use the active slot if one exists, otherwise fall back to CURRENT_TASK.md
+    active_slot = _active_slot_path()
+    task_file = active_slot or _ctx_path('CURRENT_TASK.md')
 
-            output = buf.getvalue()
-            if ok:
-                with open(_ctx_path('CURRENT_TASK.md')) as f:
-                    content = f.read()
-                return output.rstrip() + '\n\n' + content
-            return output or f'Could not add {path} — check the file exists and a session is active.'
-        finally:
-            os.chdir(orig_dir)
+    spec = f'{path} | {identifiers}' if identifiers.strip() else path
+    buf  = io.StringIO()
+    with redirect_stdout(buf):
+        ok = add_files([spec], replace=False, task_path_override=task_file,
+                       root=_repo_root)
+
+    output = buf.getvalue()
+    if ok:
+        with open(task_file) as f:
+            content = f.read()
+        return output.rstrip() + '\n\n' + content
+    return output or f'Could not add {path} — check the file exists and a session is active.'
 
 
 @mcp.tool()

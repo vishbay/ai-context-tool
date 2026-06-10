@@ -22,9 +22,6 @@ pip install 'cram-ai[mcp]'
 # With TUI dashboard
 pip install 'cram-ai[mcp,tui]'
 
-# With macOS menu bar app
-pip install 'cram-ai[mcp,tray]'
-
 # With additional model providers (OpenAI, Gemini, Bedrock, Ollama …)
 pip install 'cram-ai[mcp,multi-provider]'
 ```
@@ -265,18 +262,24 @@ pip install 'cram-ai[tui]'
 cram ui
 ```
 
-Four tabs:
+Five tabs:
 
 - **Decisions** (default) — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
-- **Sessions** — recent Claude Code sessions with reads, edits, and read-to-edit ratio.
+- **Sessions** — recent Claude Code sessions with reads, edits, read-to-edit ratio, and
+  the **task that was active** during each session. Task names are inferred from
+  `TASK_HISTORY.jsonl` by matching each session's timestamp against task time windows.
   Ratio > 5× is flagged — context isn't landing for those sessions.
-- **Health** — staleness score, per-file token budgets, active task slots.
-- **History** — recent `cram task` invocations with timestamps. This is a recall aid
-  ("what was I working on last Tuesday?"), not a project management tool — there are no
-  lifecycle states, completion tracking, or status transitions.
+- **Health** — staleness score, commits since last sync, per-file token budgets.
+- **History** — recent `cram task` invocations with timestamps. The **active session
+  task** is shown at the top in green (it lives in `session.json` and hasn't been
+  archived yet). This is a recall aid ("what was I working on last Tuesday?"), not a
+  project management tool.
+- **Actions** — run `cram sync`, `cram task`, `cram benchmark`, or `cram doctor` from
+  inside the TUI. An animated progress bar shows while a command is running.
 
-Auto-refreshes every 30 seconds. `r` forces a refresh, `q` quits.
+Each tab refreshes its data when you switch to it. Auto-refreshes every 30 seconds.
+`r` forces a full refresh, `q` quits.
 
 ---
 
@@ -344,6 +347,10 @@ cram tracks how stale your context is with a **0–10 staleness score** derived 
 number of commits on HEAD since ARCHITECTURE.md was last regenerated. No new state files; the
 score is always correct after a teammate pull.
 
+The post-commit hook writes ARCHITECTURE.md to disk but does not commit it. The health check
+detects this correctly: if the file has uncommitted changes (i.e., it was rewritten by `cram sync`
+after the last commit), the score is reported as 0 — not stale.
+
 | Score | Band | Meaning |
 |---|---|---|
 | 0–2 | `fresh` | Up to date — work freely |
@@ -401,7 +408,7 @@ across different checkouts or machines.
 | `cram mcp [--repo PATH]` | Start MCP server (stdio). Wire into your tool's settings once; clients launch it automatically. |
 | `cram task "..." [--target T]` | Run context pipeline, write CURRENT_TASK.md, optionally inject into tool's auto-loaded file |
 | `cram decisions [--mine] [--days N]` | Show DECISIONS.md, or mine git history for decision-shaped commits and review interactively |
-| `cram sync [path]` | Refresh ARCHITECTURE.md + SYMBOLS.md from current repo state |
+| `cram sync [path]` | Refresh ARCHITECTURE.md + SYMBOLS.md from current repo state. If the session grace period has expired, archives the current task to `TASK_HISTORY.jsonl` and resets the task context in all target files (your instructions are untouched — only the cram-managed task section is cleared). |
 | `cram decide "..." [path]` | Append a dated architectural decision to DECISIONS.md |
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
@@ -411,8 +418,6 @@ across different checkouts or machines.
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
 | `cram hook install\|uninstall` | Manage the git post-commit hook manually |
-| `cram menu [path]` | Launch macOS menu bar app (requires `cram-ai[tray]`) |
-| `cram autostart on\|off` | Start menu bar app at login (macOS) |
 
 ---
 
@@ -488,24 +493,14 @@ You can measure your actual overhead with `cram audit`. The read-to-edit ratio �
 first edit divided by total edits — tells you how much of each session is navigation vs. work.
 Ratio > 5× means context isn't landing.
 
-**What cram removes — and what the tray estimates:**
+**What cram removes:**
 
 cram eliminates the cold-start orientation overhead per session. It does **not** replace
-the agent's productive reads (edits, tests, active work). The savings are real and scale
-with repo size — but they are orientation-only, not total-session savings.
+the agent's productive reads (edits, tests, active work). The savings are orientation-only,
+not total-session savings.
 
-The tray models this as: `sessions/day × orientation_tokens × base_price`
-
-Default assumptions (overridable via env):
-- `AICONTEXT_SESSIONS_PER_DAY=4` — coding sessions per day
-- `AICONTEXT_TASKS_PER_SESSION=4` — tasks per warm-cache window
-- `AICONTEXT_ORIENT_FILES=8` — files read cold to orient per session
-
-**Savings scale with repo size.** A small repo like cram-ai itself (50 files, ~80k tokens)
-yields cents/day — correct and honest. A mid-size repo (200 files, ~500k tokens) yields
-roughly ~$0.50–1.50/day depending on session frequency and model.
-
-Run `cram benchmark` for a full breakdown across all three delivery strategies and all model tiers.
+Run `cram benchmark` for a full token and cost breakdown across all three delivery strategies
+and model tiers. Run `cram audit` to measure your actual read-to-edit ratio.
 
 ---
 

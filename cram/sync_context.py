@@ -18,7 +18,7 @@ SESSION_ENDED_TEMPLATE = """\
 # Current Task
 
 ## Task
-<!-- Session ended on commit. Run `cram task "..."` or use the tray to begin a new task. -->
+<!-- Session ended on commit. Run `cram task "..."` to begin a new task. -->
 
 ## Relevant Files
 <!-- Populated by `cram task "..."` -->
@@ -48,7 +48,7 @@ def update_architecture_md(structure: str, diff: str, current: str) -> str:
         f"Recent git diff:\n{diff}\n\n"
         f"Return only the updated markdown, no explanation."
     )
-    return strip_code_fence(call_model(prompt))
+    return strip_code_fence(call_context_model(prompt))
 
 
 def reset_task(root: str) -> None:
@@ -98,14 +98,17 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
         print(f"Task set {int(age)}s ago — keeping context (within {int(grace)}s grace period).")
         return
 
+    from cram.find_context import _archive_current_task_to_history
+    _archive_current_task_to_history()
+
     with open(task_path, 'w') as f:
         f.write(SESSION_ENDED_TEMPLATE)
 
     written = _targets.write_to_all_detected(root, SESSION_ENDED_TEMPLATE)
     for path in written:
-        print(f"Session ended — cleared {os.path.relpath(path, root)}")
+        print(f"Task context reset in {os.path.relpath(path, root)} (your instructions are untouched).")
     clear_session(root)
-    print("Set a new task with `cram task \"...\"` or via the tray.")
+    print("Ready for next task — run `cram task \"...\"`.")
 
 
 def sync(root: str = '.') -> None:

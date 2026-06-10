@@ -14,6 +14,14 @@ BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ')
 
 CONTEXT_DIR = '.ai-context'
 
+# Cost-model assumptions (overridable via env vars)
+# Rough average tokens per file excerpt read during orientation.
+# Override with: CRAM_AUDIT_TOK_PER_FILE=2500
+AUDIT_TOK_PER_FILE: int = int(os.environ.get('CRAM_AUDIT_TOK_PER_FILE', '2500'))
+# Sonnet base input price per token (USD).
+# Override with: CRAM_AUDIT_BASE_PRICE=0.000003
+AUDIT_BASE_PRICE: float = float(os.environ.get('CRAM_AUDIT_BASE_PRICE', str(3.0 / 1_000_000)))
+
 
 def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
     if depth > 8:
@@ -177,10 +185,9 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> Non
     avg_cw    = sum(s['cache_writes'] for s in all_sessions) / total
 
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
-    # Use 2,500 tok as rough avg file excerpt size (aligns with orientation model)
-    orient_tok_per_session = avg_rbe * 2_500
-    sonnet_base = 3.0 / 1_000_000
-    orient_cost_per_session = orient_tok_per_session * sonnet_base
+    # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
+    orient_tok_per_session = avg_rbe * AUDIT_TOK_PER_FILE
+    orient_cost_per_session = orient_tok_per_session * AUDIT_BASE_PRICE
     sessions_per_month = total / (days / 30)
     monthly_orient_cost = orient_cost_per_session * sessions_per_month * 30
 
@@ -203,6 +210,8 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> Non
     print(f"  Est. orientation tokens/session: ~{orient_tok_per_session:,.0f}")
     print(f"  Est. orientation cost/session:   ~${orient_cost_per_session:.4f}  (Sonnet, base input)")
     print(f"  Est. monthly orientation tax:    ~${monthly_orient_cost:.2f}  ({sessions_per_month:.0f} sessions/month)")
+    print(f"  Note: cost is modelled from reads_before_edit ({AUDIT_TOK_PER_FILE:,} tok/file assumed); "
+          f"the ratio is the measured signal.")
     print()
     print(f"  Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing")
 

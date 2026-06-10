@@ -69,12 +69,29 @@ def _resolve_path(raw: str, root: str = '.') -> str:
     _skip = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'dist', 'build'}
     basename = os.path.basename(raw)
     if basename:
+        matches: list[str] = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in _skip and not d.startswith('.')]
             if basename in filenames:
-                found = os.path.join(dirpath, basename)
-                if _within_root(found):
-                    return os.path.relpath(os.path.realpath(found), root)
+                candidate = os.path.join(dirpath, basename)
+                if _within_root(candidate):
+                    matches.append(os.path.relpath(os.path.realpath(candidate), root))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            # Prefer the match whose directory components overlap most with the
+            # original raw path string (the model's hint about the path).
+            raw_parts = set(raw.replace('\\', '/').split('/')[:-1])  # dir parts only
+            def _overlap(m: str) -> int:
+                m_parts = set(m.replace('\\', '/').split('/')[:-1])
+                return len(raw_parts & m_parts)
+            best_score = max(_overlap(m) for m in matches)
+            best = [m for m in matches if _overlap(m) == best_score]
+            if len(best) == 1:
+                return best[0]
+            # Still ambiguous — return raw so it surfaces as "not found" rather
+            # than silently picking the wrong file
+            return raw
     return raw
 
 
@@ -137,9 +154,14 @@ def _score_files(
 # ── excerpt extraction ────────────────────────────────────────────
 
 
-def _extract_excerpt(fpath: str, identifiers: list[str]) -> str:
-    """Return an identifier-focused excerpt of a file, or the full file if small."""
-    with open(fpath, errors='ignore') as f:
+def _extract_excerpt(fpath: str, identifiers: list[str], root: str = '.') -> str:
+    """Return an identifier-focused excerpt of a file, or the full file if small.
+
+    fpath is kept as a relative display path; the actual open uses
+    os.path.join(root, fpath) so callers don't need to os.chdir first.
+    """
+    abs_path = fpath if os.path.isabs(fpath) else os.path.join(root, fpath)
+    with open(abs_path, errors='ignore') as f:
         lines = f.readlines()
 
     total = len(lines)
@@ -237,7 +259,7 @@ def find_relevant_files(
         f"  relative/path/to/file.ext | RelevantFunc, AnotherClass\n"
         f"If no specific identifiers match, output path only. No explanation."
     )
-    raw_lines = call_model(prompt).strip().splitlines()
+    raw_lines = call_context_model(prompt).strip().splitlines()
 
     results: list[tuple[str, list[str]]] = []
     for raw in raw_lines:
@@ -259,42 +281,12 @@ def find_relevant_files(
 
 def _archive_current_task_to_history() -> None:
     """Archive the current CURRENT_TASK.md entry to TASK_HISTORY.jsonl before it's replaced."""
-    import json
-    import datetime
-    try:
-        current_path = context_path('.', 'CURRENT_TASK.md', warn=False)
-        if not current_path or not os.path.exists(current_path):
-            return
-        content = open(current_path, errors='ignore').read().strip()
-        if not content or content.startswith('<!-- Session ended'):
-            return
-        task = ''
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if s == '## Task':
-                for j in range(i + 1, len(lines)):
-                    candidate = lines[j].strip()
-                    if candidate and not candidate.startswith('#'):
-                        task = candidate
-                        break
-                break
-            if s.startswith('# Task:'):
-                task = s[len('# Task:'):].strip()
-                break
-        if not task:
-            return
-        history_path = context_path('.', 'TASK_HISTORY.jsonl', warn=False)
-        if not history_path:
-            return
-        entry = {
-            'ts':   datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'task': task,
-        }
-        with open(history_path, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-    except Exception:
-        pass
+    from cram.session import archive_task as _archive_task
+    current_path = context_path('.', 'CURRENT_TASK.md', warn=False)
+    if not current_path:
+        return
+    root = _find_git_root(os.getcwd())
+    _archive_task(root, current_path)
 
 
 # ── context assembly ──────────────────────────────────────────────
@@ -317,15 +309,24 @@ def populate_current_task(
     ctx_model: str = '',
     coding_model: str = '',
     output_path: str | None = None,
+    root: str = '.',
 ) -> list[str]:
-    """Write CURRENT_TASK.md (or output_path) with identifier-focused excerpts. Returns files inlined."""
+    """Write CURRENT_TASK.md (or output_path) with identifier-focused excerpts. Returns files inlined.
+
+    root is used for resolving relative file paths without os.chdir — callers
+    can pass the repo root and keep cwd wherever they like.
+    """
     # Normalize: accept both plain string paths and (path, identifiers) tuples
     normalized = [
         (e, []) if isinstance(e, str) else e
         for e in file_entries
     ]
-    found   = [(f, ids) for f, ids in normalized if os.path.exists(f)]
-    missing = [f for f, _ in normalized if not os.path.exists(f)]
+
+    def _exists(f: str) -> bool:
+        return os.path.exists(f if os.path.isabs(f) else os.path.join(root, f))
+
+    found   = [(f, ids) for f, ids in normalized if _exists(f)]
+    missing = [f for f, _ in normalized if not _exists(f)]
 
     target_path = output_path or context_path('.', 'CURRENT_TASK.md', warn=True)
     if output_path:
@@ -364,7 +365,7 @@ def populate_current_task(
         out.write("## Relevant Files\n")
         for fpath, ids in found:
             ext     = os.path.splitext(fpath)[1].lstrip('.')
-            excerpt = _extract_excerpt(fpath, ids)
+            excerpt = _extract_excerpt(fpath, ids, root=root)
             out.write(f"\n### {fpath}\n```{ext}\n{excerpt}\n```\n")
 
     return [f for f, _ in found]
@@ -374,6 +375,12 @@ def populate_current_task(
 
 
 def find_context(task: str, target: str | None = None, inject: bool = False, root: str = '.') -> None:
+    if inject:
+        print(
+            "Warning: --inject is deprecated; MCP delivery is the supported path. See README.",
+            file=sys.stderr,
+        )
+
     if not has_context_dir('.'):
         print(f"Error: {CONTEXT_DIR}/ not found. Run `cram init` first.", file=sys.stderr)
         sys.exit(1)
@@ -485,19 +492,10 @@ def find_context(task: str, target: str | None = None, inject: bool = False, roo
         root = _find_git_root(os.getcwd())
         expiry = None
 
-    savings_note = ''
-    try:
-        from cram.benchmark import _count_repo_tokens
-        repo_tokens, _ = _count_repo_tokens(root)
-        if repo_tokens > tokens:
-            pct = int((1 - tokens / repo_tokens) * 100)
-            savings_note = f' · {pct}% less than full repo'
-    except Exception:
-        pass
-
-    print(f"\n✓ Context ready — ~{tokens:,} tokens{savings_note}")
+    print(f"\n✓ Context ready — ~{tokens:,} tokens")
     if not (target and target != 'claude') and not inject:
         print(f'  Call get_context("{task}") via the cram-ai MCP server to load it.')
+    print("  Run `cram audit` to measure orientation tax on your real sessions.")
     if expiry:
         print(f"  Context resets on commit after {expiry} "
               f"(run `cram continue` to extend)")
@@ -524,7 +522,7 @@ def main() -> None:
     parser.add_argument(
         '--inject',
         action='store_true',
-        help='Write task content into CLAUDE.md instead of the MCP pointer (backward compat).',
+        help='[DEPRECATED] Write task content into CLAUDE.md. MCP delivery is the supported path. See README.',
     )
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()

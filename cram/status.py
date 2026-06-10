@@ -60,9 +60,16 @@ def _line_count(path: str) -> int:
 
 
 def _commits_since_context_update(root: str) -> int | None:
-    """Commits on HEAD since ARCHITECTURE.md was last committed. None if unknown."""
+    """Commits on HEAD since ARCHITECTURE.md was last synced.
+
+    cram sync writes ARCHITECTURE.md to the working tree but doesn't commit it,
+    so we check mtime first: if the file is newer than the last commit it's
+    already up to date (0). Otherwise fall back to counting commits since it
+    was last committed.
+    """
     rel_dir = CONTEXT_DIR if os.path.isdir(os.path.join(root, CONTEXT_DIR)) else LEGACY_CONTEXT_DIR
     rel = os.path.join(rel_dir, 'ARCHITECTURE.md')
+    arch_path = os.path.join(root, rel)
     try:
         sha = subprocess.check_output(
             ['git', 'log', '-1', '--format=%H', '--', rel],
@@ -70,6 +77,14 @@ def _commits_since_context_update(root: str) -> int | None:
         ).decode().strip()
         if not sha:
             return None
+        # cram sync writes ARCHITECTURE.md but doesn't commit it. If the
+        # working-tree file differs from HEAD it was already updated this sync.
+        dirty = subprocess.run(
+            ['git', 'diff', '--quiet', 'HEAD', '--', rel],
+            cwd=root, stderr=subprocess.DEVNULL,
+        ).returncode != 0
+        if dirty:
+            return 0
         count = subprocess.check_output(
             ['git', 'rev-list', '--count', f'{sha}..HEAD'],
             cwd=root, stderr=subprocess.DEVNULL,

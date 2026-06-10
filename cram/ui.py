@@ -99,7 +99,7 @@ def _build_app(root: str):  # noqa: ANN202
     from textual.screen import ModalScreen
     from textual.widgets import (
         Button, DataTable, Footer, Header, Input, Label,
-        ListItem, ListView, RichLog, Static,
+        ListItem, ListView, ProgressBar, RichLog, Static,
         TabbedContent, TabPane,
     )
     from textual.reactive import reactive
@@ -153,7 +153,10 @@ def _build_app(root: str):  # noqa: ANN202
 
         def _submit(self) -> None:
             value = self.query_one('#modal-input', Input).value.strip()
-            self.dismiss(value or None)
+            if not value:
+                self.notify('Task description cannot be blank', severity='warning')
+                return
+            self.dismiss(value)
 
         def action_cancel(self) -> None:
             self.dismiss(None)
@@ -184,6 +187,17 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_decisions()
 
         def refresh_decisions(self) -> None:
+            try:
+                self._refresh_decisions_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#accepted-list', Static).update(
+                        f'[red]Error loading decisions: {ex}[/red]'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_decisions_inner(self) -> None:
             _, entries = self._load()
             pending  = [e for e in entries if e['pending']]
             accepted = [e for e in entries if not e['pending']]
@@ -244,6 +258,63 @@ def _build_app(root: str):  # noqa: ANN202
 
     # ── Sessions pane ────────────────────────────────────────────
 
+    def _build_task_intervals(repo_root: str) -> list[tuple[float, float, str]]:
+        """Return list of (start_ts, end_ts, task) sorted newest-first.
+
+        Intervals are reconstructed from TASK_HISTORY.jsonl + session.json.
+        Each history entry's `ts` is when that task was *archived* (= when the
+        next task started), so consecutive archive times give us start/end bounds.
+        """
+        import json as _json
+        from cram.session import load_session
+
+        intervals: list[tuple[float, float, str]] = []
+        history_path = os.path.join(repo_root, '.ai-context', 'TASK_HISTORY.jsonl')
+
+        entries: list[dict] = []
+        try:
+            if os.path.exists(history_path):
+                with open(history_path, errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                entries.append(_json.loads(line))
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
+
+        def _parse_ts(s: str) -> float:
+            try:
+                return datetime.fromisoformat(s).timestamp()
+            except Exception:
+                return 0.0
+
+        # Build intervals: entry[i] ended at ts[i], started at ts[i-1] (or 0)
+        for i, e in enumerate(entries):
+            end   = _parse_ts(e.get('ts', ''))
+            start = _parse_ts(entries[i - 1].get('ts', '')) if i > 0 else 0.0
+            intervals.append((start, end, e.get('task', '')))
+
+        # Current active task: started at session.set_at, ends at infinity
+        session = load_session(repo_root)
+        if session and session.get('task') and not session['task'].startswith('<!--'):
+            start = session.get('set_at', 0.0)
+            intervals.append((start, float('inf'), session['task']))
+
+        intervals.sort(key=lambda x: x[0], reverse=True)
+        return intervals
+
+    def _task_for_mtime(mtime: float, intervals: list[tuple[float, float, str]]) -> str:
+        """Return the task description active at `mtime`, truncated to 32 chars."""
+        for start, end, task in intervals:
+            if start <= mtime <= end:
+                return task[:32] + '…' if len(task) > 32 else task
+        return ''
+
     class SessionsPane(ScrollableContainer):
         def compose(self) -> ComposeResult:
             yield Static('', id='sessions-legend')
@@ -251,28 +322,40 @@ def _build_app(root: str):  # noqa: ANN202
 
         def on_mount(self) -> None:
             table = self.query_one('#sessions-table', DataTable)
-            table.add_columns('Date', 'File reads', 'File writes', 'Explore ratio', 'Cache read tok', 'Efficiency')
+            table.add_columns('Date', 'Task', 'Reads', 'Writes', 'Explore ratio', 'Cache tok', 'Efficiency')
             self.query_one('#sessions-legend', Static).update(
                 '[dim]Explore ratio = reads before first write ÷ writes.  '
-                'Low (< 2×) = good context, agent knew where to look.  '
-                'High (> 5×) = agent explored a lot before writing.[/dim]\n'
+                'Low (< 2×) = good context.  High (> 5×) = agent explored a lot.[/dim]\n'
             )
             self.refresh_sessions()
 
         def refresh_sessions(self) -> None:
+            try:
+                self._refresh_sessions_inner()
+            except Exception as ex:
+                try:
+                    table = self.query_one('#sessions-table', DataTable)
+                    table.clear()
+                    table.add_row(f'Error loading sessions: {ex}', '', '', '', '', '', '')
+                except Exception:
+                    pass
+
+        def _refresh_sessions_inner(self) -> None:
             import glob as _glob
             table = self.query_one('#sessions-table', DataTable)
             table.clear()
 
             td = _project_transcript_dir(root)
             if not td:
-                table.add_row('No transcripts found', '', '', '', '', '')
+                table.add_row('No transcripts found', '', '', '', '', '', '')
                 return
 
             files = sorted(_glob.glob(td + '/*.jsonl'), key=os.path.getmtime, reverse=True)[:20]
             if not files:
-                table.add_row('No sessions found', '', '', '', '', '')
+                table.add_row('No sessions found', '', '', '', '', '', '')
                 return
+
+            intervals = _build_task_intervals(root)
 
             for fpath in files:
                 r = _analyze_transcript(fpath)
@@ -280,16 +363,18 @@ def _build_app(root: str):  # noqa: ANN202
                     continue
                 mtime    = datetime.fromtimestamp(r['mtime'])
                 date_str = mtime.strftime('%m-%d %H:%M')
+                task_str = _task_for_mtime(r['mtime'], intervals)
                 ratio    = r['ratio']
                 cache_k  = f'{r["cache_reads"] // 1000}k' if r.get('cache_reads', 0) >= 1000 else str(r.get('cache_reads', 0))
                 if ratio < 2:
                     eff = '[green]good[/green]'
                 elif ratio > 5:
-                    eff = '[red]high — context may not be landing[/red]'
+                    eff = '[red]high[/red]'
                 else:
                     eff = '[yellow]normal[/yellow]'
                 table.add_row(
                     date_str,
+                    task_str,
                     str(r['reads']),
                     str(r['edits']),
                     f'{ratio:.1f}×',
@@ -307,6 +392,18 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_health()
 
         def refresh_health(self) -> None:
+            try:
+                self._refresh_health_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#health-body', Static).update(
+                        f'[red]Error loading health data: {ex}[/red]\n'
+                        'Run `cram doctor` from the terminal to diagnose.'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_health_inner(self) -> None:
             h = context_health(root)
             score     = h['staleness_score']
             band      = h['staleness_band']
@@ -347,6 +444,9 @@ def _build_app(root: str):  # noqa: ANN202
                     f'  [{fc}]{fname:<22}[/{fc}]  {info["tokens"]:>5} tok {budget_str}{note}'
                 )
 
+            if not h.get('files'):
+                lines.append('  [dim]No context files found. Run `cram init` first.[/dim]')
+
             self.query_one('#health-body', Static).update('\n'.join(lines))
 
     # ── History pane ─────────────────────────────────────────────
@@ -359,30 +459,53 @@ def _build_app(root: str):  # noqa: ANN202
             self.refresh_history()
 
         def refresh_history(self) -> None:
-            import json as _json
-            history_path = os.path.join(root, '.ai-context', 'TASK_HISTORY.jsonl')
-            if not os.path.exists(history_path):
-                self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
-                return
             try:
-                entries = []
+                self._refresh_history_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#history-body', Static).update(
+                        f'[red]Error loading history: {ex}[/red]'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_history_inner(self) -> None:
+            import json as _json
+            from cram.session import load_session
+
+            lines = ['[b]Recent Tasks[/b]\n']
+
+            # Show the active session task at the top (it hasn't been archived yet)
+            session = load_session(root)
+            if session and session.get('task') and not session['task'].startswith('<!--'):
+                set_at = session.get('set_at', 0)
+                ts = datetime.fromtimestamp(set_at).strftime('%Y-%m-%d %H:%M') if set_at else ''
+                lines.append(f'  [dim]{ts}[/dim]  [green]{session["task"]}[/green]  [dim](active)[/dim]')
+
+            history_path = os.path.join(root, '.ai-context', 'TASK_HISTORY.jsonl')
+            entries = []
+            if os.path.exists(history_path):
                 with open(history_path, errors='ignore') as f:
                     for line in f:
                         line = line.strip()
                         if line:
                             entries.append(_json.loads(line))
-                if not entries:
-                    self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
-                    return
-                entries = entries[::-1]
-                lines = ['[b]Recent Tasks[/b]\n']
-                for e in entries:
-                    ts = e.get('ts', '')[:16].replace('T', ' ')
-                    task = e.get('task', '')
-                    lines.append(f'  [dim]{ts}[/dim]  {task}')
-                self.query_one('#history-body', Static).update('\n'.join(lines))
-            except Exception as ex:
-                self.query_one('#history-body', Static).update(f'[red]Error: {ex}[/red]')
+            entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
+            entries = entries[::-1]
+            for e in entries:
+                raw_ts = e.get('ts', '')
+                try:
+                    dt = datetime.fromisoformat(raw_ts).astimezone()
+                    ts = dt.strftime('%Y-%m-%d %H:%M')
+                except Exception:
+                    ts = raw_ts[:16].replace('T', ' ')
+                task = e.get('task', '')
+                lines.append(f'  [dim]{ts}[/dim]  {task}')
+
+            if len(lines) == 1:
+                self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
+                return
+            self.query_one('#history-body', Static).update('\n'.join(lines))
 
     # ── Actions pane ─────────────────────────────────────────────
 
@@ -398,14 +521,17 @@ def _build_app(root: str):  # noqa: ANN202
         def compose(self) -> ComposeResult:
             yield Static(_ACTIONS_MENU, id='actions-menu')
             yield Label('[b]Output[/b]', id='output-header')
+            yield ProgressBar(id='output-spinner', total=None, show_eta=False)
             yield RichLog(id='output-log', highlight=True, markup=True, wrap=True)
 
         def start_command(self, cmd_str: str) -> None:
             log = self.query_one('#output-log', RichLog)
             log.clear()
             log.write(f'[dim]$ {cmd_str}[/dim]\n')
+            self.query_one('#output-spinner', ProgressBar).display = True
 
         def append_output(self, text: str) -> None:
+            self.query_one('#output-spinner', ProgressBar).display = False
             self.query_one('#output-log', RichLog).write(text)
 
     # ── Main app ─────────────────────────────────────────────────
@@ -447,6 +573,11 @@ def _build_app(root: str):  # noqa: ANN202
         }
         #actions-menu {
             margin-bottom: 1;
+        }
+        #output-spinner {
+            display: none;
+            height: 1;
+            margin: 1 0;
         }
         TaskInputModal {
             align: center middle;
@@ -491,6 +622,22 @@ def _build_app(root: str):  # noqa: ANN202
         def on_mount(self) -> None:
             self._update_title()
             self.set_interval(30, self._auto_refresh)
+
+        def on_tabbed_content_tab_activated(self, event) -> None:
+            pane_id = event.pane.id if event.pane else None
+            refresh_map = {
+                'decisions': ('#decisions-pane', 'refresh_decisions'),
+                'sessions':  ('#sessions-pane',  'refresh_sessions'),
+                'health':    ('#health-pane',    'refresh_health'),
+                'history':   ('#history-pane',   'refresh_history'),
+            }
+            pair = refresh_map.get(pane_id)
+            if pair:
+                try:
+                    w = self.query_one(pair[0])
+                    getattr(w, pair[1])()
+                except Exception:
+                    pass
 
         def _update_title(self) -> None:
             pane = self.query_one('#decisions-pane', DecisionsPane)
@@ -560,6 +707,10 @@ def _build_app(root: str):  # noqa: ANN202
                 try:
                     actions = self.query_one('#actions-pane', ActionsPane)
                     actions.append_output(event.worker.result or '(no output)\n')
+                except Exception:
+                    pass
+                try:
+                    self.query_one('#history-pane').refresh_history()
                 except Exception:
                     pass
 
