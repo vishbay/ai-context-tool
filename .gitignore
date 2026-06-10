@@ -8,6 +8,10 @@ venv/
 .env
 .DS_Store
 .ai-context/CURRENT_TASK.md
+.ai-context/session.json
+.ai-context/tasks/
+.ai-context/usage.jsonl
+.ai-context/TASK_HISTORY.jsonl
 .cram-ai-context/CURRENT_TASK.md
 .vscode/
 .claude/settings.local.json
