@@ -386,7 +386,12 @@ def _build_app(root: str):  # noqa: ANN202
                 entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
                 entries = entries[::-1]
                 for e in entries:
-                    ts = e.get('ts', '')[:16].replace('T', ' ')
+                    raw_ts = e.get('ts', '')
+                    try:
+                        dt = datetime.fromisoformat(raw_ts).astimezone()
+                        ts = dt.strftime('%Y-%m-%d %H:%M')
+                    except Exception:
+                        ts = raw_ts[:16].replace('T', ' ')
                     task = e.get('task', '')
                     lines.append(f'  [dim]{ts}[/dim]  {task}')
             except Exception as ex:
