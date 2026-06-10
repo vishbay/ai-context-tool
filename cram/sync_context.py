@@ -98,6 +98,9 @@ def _reset_task_if_session_ended(root: str, context_dir: str) -> None:
         print(f"Task set {int(age)}s ago — keeping context (within {int(grace)}s grace period).")
         return
 
+    from cram.find_context import _archive_current_task_to_history
+    _archive_current_task_to_history()
+
     with open(task_path, 'w') as f:
         f.write(SESSION_ENDED_TEMPLATE)
 

@@ -60,10 +60,24 @@ def _line_count(path: str) -> int:
 
 
 def _commits_since_context_update(root: str) -> int | None:
-    """Commits on HEAD since ARCHITECTURE.md was last committed. None if unknown."""
+    """Commits on HEAD since ARCHITECTURE.md was last synced.
+
+    cram sync writes ARCHITECTURE.md to the working tree but doesn't commit it,
+    so we check mtime first: if the file is newer than the last commit it's
+    already up to date (0). Otherwise fall back to counting commits since it
+    was last committed.
+    """
     rel_dir = CONTEXT_DIR if os.path.isdir(os.path.join(root, CONTEXT_DIR)) else LEGACY_CONTEXT_DIR
     rel = os.path.join(rel_dir, 'ARCHITECTURE.md')
+    arch_path = os.path.join(root, rel)
     try:
+        last_commit_ts = int(subprocess.check_output(
+            ['git', 'log', '-1', '--format=%ct'],
+            cwd=root, stderr=subprocess.DEVNULL,
+        ).decode().strip() or '0')
+        arch_mtime = os.path.getmtime(arch_path) if os.path.exists(arch_path) else 0
+        if arch_mtime >= last_commit_ts:
+            return 0
         sha = subprocess.check_output(
             ['git', 'log', '-1', '--format=%H', '--', rel],
             cwd=root, stderr=subprocess.DEVNULL,
