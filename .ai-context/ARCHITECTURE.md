@@ -125,6 +125,15 @@ cram is designed for **one developer, one repo checkout**. Task slot namespacing
 
 The post-commit hook writes ARCHITECTURE.md to disk but does not commit it. The health check detects this correctly: if the file has uncommitted changes (rewritten by `cram sync` after the last commit), staleness score is reported as 0—not stale.
 
+## Git Hooks
+
+cram installs two hooks to automate context synchronization:
+
+- **post-commit**: Runs `cram sync` to update ARCHITECTURE.md and SYMBOLS.md on every commit
+- **commit-msg**: Processes decision-language prompts in commit messages; enables recording architectural decisions inline during commits
+
+Install via `cram init` or `cram hook install`.
+
 ## Dependencies
 
 All Python dependencies specified in `requirements.txt` and `pyproject.toml`. Install with `pip install -e .` or `pip install cram-ai`.

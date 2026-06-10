@@ -10,7 +10,7 @@ cram/doctor.py: main
 cram/find_context.py: find_relevant_files, populate_current_task, find_context, main
 cram/gotcha.py: append_gotcha, main
 cram/health.py: context_health
-cram/hooks.py: install_global_claude_md, uninstall_global_claude_md, install_commit_msg_hook, install_hook, install_checkout_hook, main, install_claude_code_hooks, uninstall_hook
+cram/hooks.py: install_global_claude_md, uninstall_global_claude_md, install_commit_msg_hook, install_hook, main, install_claude_code_hooks, uninstall_hook
 cram/init.py: scan_structure, generate_architecture_md, write_gitignore, write_ci_action, init_repo, main
 cram/mcp_server.py: get_context, get_architecture, get_symbols, get_decisions, propose_decision, get_gotchas, get_health, add_file, run_benchmark, get_task_history, main
 cram/session.py: save_session, set_last_slot, get_last_slot, archive_task, load_session, touch_session, session_age, session_within_grace, clear_session

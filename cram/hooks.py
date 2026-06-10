@@ -1,4 +1,4 @@
-"""Git hook installer — wires cram sync into the post-commit and post-checkout hooks."""
+"""Git hook installer — wires cram sync into the post-commit and commit-msg hooks."""
 
 from __future__ import annotations
 import os
@@ -83,22 +83,6 @@ elif command -v python3 >/dev/null 2>&1; then
 fi
 """
 
-POST_CHECKOUT_HOOK_SCRIPT = """\
-#!/bin/sh
-# Installed by cram-ai — notifies tray popup on branch switch
-prev_head="$1"
-new_head="$2"
-is_branch_checkout="$3"
-if [ "$is_branch_checkout" = "1" ] && [ "$prev_head" != "$new_head" ]; then
-    new_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "unknown")
-    port=$(cat "$HOME/.config/cram-ai/port" 2>/dev/null || echo "49155")
-    curl -sf -X POST "http://127.0.0.1:${port}/notify-branch-switch" \\
-        -H "Content-Type: application/json" \\
-        --data-raw "{\"branch\": \"${new_branch}\"}" > /dev/null 2>&1 || true
-fi
-"""
-
-
 COMMIT_MSG_HOOK_SCRIPT = """\
 #!/bin/sh
 # Installed by cram-ai — prompts to record architectural decisions
@@ -163,18 +147,6 @@ def install_hook(repo_root: str = '.') -> bool:
     a = _write_hook(os.path.join(hooks_dir, 'post-commit'), HOOK_SCRIPT, 'cram-ai')
     b = _write_hook(os.path.join(hooks_dir, 'commit-msg'), COMMIT_MSG_HOOK_SCRIPT, 'cram-ai')
     return a or b
-
-
-def install_checkout_hook(repo_root: str = '.') -> bool:
-    """Write post-checkout hook for branch-switch detection. Returns True if installed."""
-    root = os.path.abspath(repo_root)
-    git_dir = _git_dir(root)
-    if not git_dir:
-        print(f"No .git/ directory found in {root}. Skipping hook install.")
-        return False
-    hooks_dir = os.path.join(git_dir, 'hooks')
-    os.makedirs(hooks_dir, exist_ok=True)
-    return _write_hook(os.path.join(hooks_dir, 'post-checkout'), POST_CHECKOUT_HOOK_SCRIPT, 'cram-ai')
 
 
 SESSION_START_HOOK_SCRIPT = '''\

@@ -5,7 +5,7 @@ import sys
 import fnmatch
 
 from cram.utils import call_model, strip_code_fence
-from cram.hooks import install_hook, install_checkout_hook, install_global_claude_md, install_claude_code_hooks
+from cram.hooks import install_hook, install_global_claude_md, install_claude_code_hooks
 from cram.symbols import write_symbols_md
 from cram.targets import write_to_target, _byte_cap_block
 from cram.context_dir import CONTEXT_DIR, LEGACY_CONTEXT_DIR, canonical_context_dir, legacy_context_dir
@@ -198,7 +198,6 @@ def init_repo(target: str = '.', team: bool = False) -> None:
     write_gitignore(context_dir)
 
     install_hook(root)
-    install_checkout_hook(root)
     install_global_claude_md()
     install_claude_code_hooks(root)
 
