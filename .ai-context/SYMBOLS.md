@@ -23,17 +23,18 @@ cram/ui.py: main
 cram/usage.py: measured_usage
 cram/utils.py: load_settings, save_settings, discover_models, pick_context_model, pick_coding_model, cache_min_tokens, get_model_recommendations, call_context_model, call_model, find_git_root, strip_code_fence
 scripts/generate_icns.py: main
-tests/test_audit.py: TestAnalyzeTranscript, TestFindAllToolUse
+tests/test_audit.py: TestAnalyzeTranscript, TestFindAllToolUse, TestAuditConstants
 tests/test_context_dir.py: test_prefers_canonical_context_dir, test_falls_back_to_legacy_context_dir, test_context_path_uses_resolved_dir
 tests/test_cost_model.py: test_orientation_caps_at_repo_tokens, test_orientation_zero_files, test_daily_saving_never_negative, test_nocram_scales_linearly_with_orient_files, test_daily_costs_returns_expected_keys, test_import_works, TestBudgetStatus
 tests/test_decisions.py: repo, TestFilterCommits, TestParseModelOutput, TestAppendWithReason, TestShowDecisions, TestMineDecisions
 tests/test_find_context.py: TestCleanPath, TestReadTruncated, TestFindRelevantFiles, TestPopulateCurrentTask, TestScoreFiles, TestContractFields, TestFindContext, TestChdirFreeExtraction, TestResolvePathDisambiguation
 tests/test_hooks.py: TestInstallCommitMsgHook, TestInstallHookInstallsBoth, TestCommitMsgPatternDetection
 tests/test_init.py: TestIsExcludedFile, TestScanStructure, TestWriteGitignore, TestInitRepo
-tests/test_mcp_server.py: repo, TestGetArchitectureDeterminism, TestGetDecisionsDeterminism, TestGetSymbolsDeterminism, TestGetContextDeterminism, TestGetHealthDeterminism, TestTaskSlotNamespacing, TestUsageLog, TestProposeDecision, TestSlotCoherence, TestArchiveTask
+tests/test_mcp_server.py: repo, TestGetArchitectureDeterminism, TestGetDecisionsDeterminism, TestGetSymbolsDeterminism, TestGetContextDeterminism, TestGetHealthDeterminism, TestTaskSlotNamespacing, TestUsageLog, TestProposeDecision, TestSlotCoherence, TestArchiveTask, TestInitGuard
 tests/test_status.py: TestStalenessScore, TestStalenessBand, TestGetStatusDictBackCompat, git_repo, TestGetStatusDictIntegration
 tests/test_symbols.py: TestByteStability
 tests/test_sync.py: TestGetGitDiff, TestUpdateArchitectureMd, TestSync
 tests/test_targets.py: TestSaveLoadDefaultTarget, TestDetectTargets, TestWriteToTarget, TestCustomTargets
+tests/test_ui_smoke.py: empty_repo, TestUiSmoke
 tests/test_usage.py: test_missing_dir_returns_none, test_sums_match_fixture, test_malformed_lines_skipped, test_old_files_excluded
 tests/test_utils.py: TestStripCodeFence, TestCallModelRouting, TestCallViaLitellmMissing, TestProxyHeaders

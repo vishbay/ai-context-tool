@@ -22,9 +22,6 @@ pip install 'cram-ai[mcp]'
 # With TUI dashboard
 pip install 'cram-ai[mcp,tui]'
 
-# With macOS menu bar app
-pip install 'cram-ai[mcp,tray]'
-
 # With additional model providers (OpenAI, Gemini, Bedrock, Ollama …)
 pip install 'cram-ai[mcp,multi-provider]'
 ```
@@ -421,8 +418,6 @@ across different checkouts or machines.
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
 | `cram hook install\|uninstall` | Manage the git post-commit hook manually |
-| `cram menu [path]` | Launch macOS menu bar app (requires `cram-ai[tray]`) |
-| `cram autostart on\|off` | Start menu bar app at login (macOS) |
 
 ---
 
@@ -498,24 +493,14 @@ You can measure your actual overhead with `cram audit`. The read-to-edit ratio �
 first edit divided by total edits — tells you how much of each session is navigation vs. work.
 Ratio > 5× means context isn't landing.
 
-**What cram removes — and what the tray estimates:**
+**What cram removes:**
 
 cram eliminates the cold-start orientation overhead per session. It does **not** replace
-the agent's productive reads (edits, tests, active work). The savings are real and scale
-with repo size — but they are orientation-only, not total-session savings.
+the agent's productive reads (edits, tests, active work). The savings are orientation-only,
+not total-session savings.
 
-The tray models this as: `sessions/day × orientation_tokens × base_price`
-
-Default assumptions (overridable via env):
-- `AICONTEXT_SESSIONS_PER_DAY=4` — coding sessions per day
-- `AICONTEXT_TASKS_PER_SESSION=4` — tasks per warm-cache window
-- `AICONTEXT_ORIENT_FILES=8` — files read cold to orient per session
-
-**Savings scale with repo size.** A small repo like cram-ai itself (50 files, ~80k tokens)
-yields cents/day — correct and honest. A mid-size repo (200 files, ~500k tokens) yields
-roughly ~$0.50–1.50/day depending on session frequency and model.
-
-Run `cram benchmark` for a full breakdown across all three delivery strategies and all model tiers.
+Run `cram benchmark` for a full token and cost breakdown across all three delivery strategies
+and model tiers. Run `cram audit` to measure your actual read-to-edit ratio.
 
 ---
 
