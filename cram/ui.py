@@ -99,7 +99,7 @@ def _build_app(root: str):  # noqa: ANN202
     from textual.screen import ModalScreen
     from textual.widgets import (
         Button, DataTable, Footer, Header, Input, Label,
-        ListItem, ListView, LoadingIndicator, RichLog, Static,
+        ListItem, ListView, ProgressBar, RichLog, Static,
         TabbedContent, TabPane,
     )
     from textual.reactive import reactive
@@ -476,17 +476,17 @@ def _build_app(root: str):  # noqa: ANN202
         def compose(self) -> ComposeResult:
             yield Static(_ACTIONS_MENU, id='actions-menu')
             yield Label('[b]Output[/b]', id='output-header')
-            yield LoadingIndicator(id='output-spinner')
+            yield ProgressBar(id='output-spinner', total=None, show_eta=False)
             yield RichLog(id='output-log', highlight=True, markup=True, wrap=True)
 
         def start_command(self, cmd_str: str) -> None:
             log = self.query_one('#output-log', RichLog)
             log.clear()
             log.write(f'[dim]$ {cmd_str}[/dim]\n')
-            self.query_one('#output-spinner', LoadingIndicator).display = True
+            self.query_one('#output-spinner', ProgressBar).display = True
 
         def append_output(self, text: str) -> None:
-            self.query_one('#output-spinner', LoadingIndicator).display = False
+            self.query_one('#output-spinner', ProgressBar).display = False
             self.query_one('#output-log', RichLog).write(text)
 
     # ── Main app ─────────────────────────────────────────────────
@@ -531,7 +531,8 @@ def _build_app(root: str):  # noqa: ANN202
         }
         #output-spinner {
             display: none;
-            height: 3;
+            height: 1;
+            margin: 1 0;
         }
         TaskInputModal {
             align: center middle;
