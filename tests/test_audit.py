@@ -8,7 +8,10 @@ import tempfile
 
 import pytest
 
-from cram.audit import _analyze_transcript, _find_all_tool_use, AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE
+from cram.audit import (
+    _analyze_transcript, _find_all_tool_use, collect_audit, ratio_band,
+    AUDIT_TOK_PER_FILE, AUDIT_BASE_PRICE,
+)
 
 
 def _make_transcript(tool_calls: list[tuple[str, dict]], tmp_path) -> str:
@@ -119,6 +122,86 @@ class TestAnalyzeTranscript:
         path = _make_transcript(calls, tmp_path)
         r = _analyze_transcript(path)
         assert r['ratio'] > 5.0
+
+
+class TestRatioBand:
+    def test_bands(self):
+        assert ratio_band(0.5) == 'good'
+        assert ratio_band(1.99) == 'good'
+        assert ratio_band(2.0) == 'normal'
+        assert ratio_band(4.99) == 'normal'
+        assert ratio_band(5.0) == 'high'
+        assert ratio_band(12.0) == 'high'
+
+
+def _write_transcript(path, tool_calls, usage=None):
+    """Write a JSONL transcript with tool_use blocks and an optional usage block."""
+    with open(path, 'w') as f:
+        for name, inp in tool_calls:
+            f.write(json.dumps({'type': 'tool_use', 'name': name, 'input': inp}) + '\n')
+        if usage is not None:
+            f.write(json.dumps({'usage': usage}) + '\n')
+
+
+class TestCollectAudit:
+    def _setup_transcripts(self, tmp_path, monkeypatch, sessions):
+        import cram.audit as _audit_mod
+        td = tmp_path / 'transcripts' / 'proj'
+        td.mkdir(parents=True)
+        for i, (calls, usage) in enumerate(sessions):
+            _write_transcript(str(td / f's{i}.jsonl'), calls, usage)
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda repo_root: str(td))
+        return td
+
+    def test_returns_none_without_transcripts(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir', lambda r: None)
+        assert collect_audit(str(tmp_path)) is None
+
+    def test_summary_fields(self, tmp_path, monkeypatch):
+        self._setup_transcripts(tmp_path, monkeypatch, [
+            ([('Read', {}), ('Read', {}), ('Edit', {})], None),
+            ([('Read', {}), ('Edit', {}), ('Edit', {})], None),
+        ])
+        data = collect_audit(str(tmp_path), days=365)
+        assert data is not None
+        assert data['sessions'] == 2
+        assert abs(data['avg_reads_before_edit'] - 1.5) < 0.01
+        assert data['ratio_band'] in ('good', 'normal', 'high')
+        assert len(data['recent']) == 2
+        assert data['weekly']  # at least one weekly bucket
+
+    def test_cache_blind_session_detected(self, tmp_path, monkeypatch):
+        # One session reads from cache, one writes but never reads.
+        self._setup_transcripts(tmp_path, monkeypatch, [
+            ([('Read', {}), ('Edit', {})],
+             {'cache_creation_input_tokens': 5000, 'cache_read_input_tokens': 90000}),
+            ([('Read', {}), ('Edit', {})],
+             {'cache_creation_input_tokens': 5000, 'cache_read_input_tokens': 0}),
+        ])
+        data = collect_audit(str(tmp_path), days=365)
+        assert data['cache_engaged_sessions'] == 1
+        assert data['cache_blind_sessions'] == 1
+
+    def test_monthly_cost_not_inflated(self, tmp_path, monkeypatch):
+        """Monthly orientation tax = cost/session × sessions/month — no extra ×30."""
+        self._setup_transcripts(tmp_path, monkeypatch, [
+            ([('Read', {}), ('Read', {}), ('Edit', {})], None),
+        ])
+        data = collect_audit(str(tmp_path), days=30)
+        expected = data['orient_cost_per_session'] * data['sessions_per_month']
+        assert abs(data['monthly_orient_cost'] - expected) < 1e-9
+
+    def test_json_output_is_valid(self, tmp_path, monkeypatch, capsys):
+        from cram.audit import run_audit
+        self._setup_transcripts(tmp_path, monkeypatch, [
+            ([('Read', {}), ('Edit', {})], None),
+        ])
+        run_audit(str(tmp_path), days=365, as_json=True)
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed['sessions'] == 1
+        assert 'ratio_band' in parsed
 
 
 class TestFindAllToolUse:

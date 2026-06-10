@@ -201,16 +201,16 @@ cram task "add pagination to the users endpoint" --target all
 | `all` | All detected targets |
 
 **Custom targets** — for tools with non-standard instruction files (e.g., an enterprise IDE with
-`AURA.md`), add a section to `.ai-context/config.toml`:
+`ACME.md`), add a section to `.ai-context/config.toml`:
 
 ```toml
-[targets.aura]
-file      = "AURA.md"
-indicator = "aura.config.json"   # optional: file/dir that signals tool is active
+[targets.acme]
+file      = "ACME.md"
+indicator = "acme.config.json"   # optional: file/dir that signals tool is active
 upsert    = true                 # optional: use cram markers to preserve your content
 ```
 
-Then `cram task "..." --target aura` works like any built-in target.
+Then `cram task "..." --target acme` works like any built-in target.
 
 **Enterprise gateways** — for internal model proxies that use SSO tokens instead of API keys,
 add to `~/.config/cram-ai/settings.json`:
@@ -262,9 +262,13 @@ pip install 'cram-ai[tui]'
 cram ui
 ```
 
-Five tabs:
+Six tabs:
 
-- **Decisions** (default) — pending agent proposals at top, accepted history below.
+- **Audit** (default) — the orientation-tax numbers for the last 30 days: reads before
+  first edit, read-to-edit ratio with band, cache writes/reads per session, a
+  cache-engagement check (sessions that wrote cache but never read it back), and a
+  weekly trend of the primary metric. The dashboard opens on the number, not the knobs.
+- **Decisions** — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
 - **Sessions** — recent Claude Code sessions with reads, edits, read-to-edit ratio, and
   the **task that was active** during each session. Task names are inferred from
@@ -291,6 +295,7 @@ Each tab refreshes its data when you switch to it. Auto-refreshes every 30 secon
 cram audit           # last 30 days for this repo
 cram audit --days 7  # tighter window
 cram audit --all     # all projects
+cram audit --json    # structured output for dashboards / scripts
 ```
 
 Output includes:
@@ -299,9 +304,14 @@ Output includes:
 Avg reads before first edit:    8.2  ← primary metric
 Avg edits/session:              3.1
 Avg read-to-edit ratio:         2.6×  ~ normal
+Cache engagement:               18/24 sessions read from cache
 
 Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
 ```
+
+The cache-engagement line is the silent-failure check: a session that wrote cache but
+never read it back paid the 1.25× write price for nothing — a signal that prompt
+caching isn't engaging (prefix instability, sub-floor prefix, or a misconfigured proxy).
 
 Run before and after adopting cram to measure the reduction.
 
@@ -413,7 +423,7 @@ across different checkouts or machines.
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
 | `cram status [path]` | Show each context file with age, line count, and token budget status |
-| `cram audit [--days N] [--all]` | Measure reads-before-edit and read-to-edit ratio from Claude Code transcripts |
+| `cram audit [--days N] [--all] [--json]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
 | `cram ui [path]` | TUI dashboard — pending decisions, session efficiency, context health (requires `cram-ai[tui]`) |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |

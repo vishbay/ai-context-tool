@@ -127,19 +127,28 @@ def _project_transcript_dir(repo_root: str) -> str | None:
     return None
 
 
-def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> None:
-    """Print an orientation-tax audit for the repo (or all projects)."""
+def ratio_band(ratio: float) -> str:
+    """Map a read-to-edit ratio onto the documented bands: good / normal / high."""
+    if ratio < 2.0:
+        return 'good'
+    if ratio < 5.0:
+        return 'normal'
+    return 'high'
 
+
+def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> dict | None:
+    """Analyse transcripts and return structured audit data, or None if none found.
+
+    This is the data core shared by the CLI report, `cram audit --json`, and the
+    TUI's Audit tab.
+    """
     if all_projects:
         projects_root = os.path.join(os.path.expanduser('~'), '.claude', 'projects')
         dirs = sorted(glob.glob(projects_root + '/*/'))
     else:
         td = _project_transcript_dir(repo_root)
         if not td:
-            print("No Claude Code transcripts found for this repo.")
-            print("  (Expected: ~/.claude/projects/" +
-                  repo_root.replace(os.sep, '-').lstrip('-') + "/)")
-            return
+            return None
         dirs = [td + '/']
 
     cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
@@ -173,53 +182,113 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> Non
         project_summaries.append((name, len(sessions), avg_reads, avg_rbe, avg_cw))
 
     if not all_sessions:
-        print(f"No sessions found in the last {days} days.")
-        return
+        return None
 
-    # ── Summary ──────────────────────────────────────────────────
     total     = len(all_sessions)
     avg_reads = sum(s['reads'] for s in all_sessions) / total
     avg_rbe   = sum(s['reads_before_edit'] for s in all_sessions) / total
     avg_edits = sum(s['edits'] for s in all_sessions) / total
     avg_ratio = sum(s['ratio'] for s in all_sessions) / total
     avg_cw    = sum(s['cache_writes'] for s in all_sessions) / total
+    avg_cr    = sum(s['cache_reads'] for s in all_sessions) / total
+
+    # Cache-engagement signal: a session that wrote cache but never read it paid
+    # the 1.25× write price and got nothing back — caching may not be engaging.
+    cache_engaged = sum(1 for s in all_sessions if s['cache_reads'] > 0)
+    cache_blind   = sum(1 for s in all_sessions
+                        if s['cache_writes'] > 0 and s['cache_reads'] == 0)
 
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
     # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
-    orient_tok_per_session = avg_rbe * AUDIT_TOK_PER_FILE
+    orient_tok_per_session  = avg_rbe * AUDIT_TOK_PER_FILE
     orient_cost_per_session = orient_tok_per_session * AUDIT_BASE_PRICE
-    sessions_per_month = total / (days / 30)
-    monthly_orient_cost = orient_cost_per_session * sessions_per_month * 30
+    sessions_per_month      = total / (days / 30)
+    monthly_orient_cost     = orient_cost_per_session * sessions_per_month
 
-    # Read-to-edit ratio benchmark
-    if avg_ratio < 2.0:
-        ratio_label = '✓ good'
-    elif avg_ratio < 5.0:
-        ratio_label = '~ normal'
-    else:
-        ratio_label = '⚠ high — context may not be landing'
+    # Weekly trend of the primary metric, oldest → newest, last 8 ISO weeks
+    weekly_map: dict[str, list[float]] = {}
+    for s in all_sessions:
+        wk = datetime.datetime.fromtimestamp(s['mtime']).strftime('%G-W%V')
+        weekly_map.setdefault(wk, []).append(s['reads_before_edit'])
+    weekly = [(wk, sum(v) / len(v), len(v)) for wk, v in sorted(weekly_map.items())][-8:]
+
+    recent = sorted(all_sessions, key=lambda s: s['mtime'], reverse=True)[:20]
+
+    return {
+        'days':                      days,
+        'sessions':                  total,
+        'avg_reads':                 avg_reads,
+        'avg_reads_before_edit':     avg_rbe,
+        'avg_edits':                 avg_edits,
+        'avg_ratio':                 avg_ratio,
+        'ratio_band':                ratio_band(avg_ratio),
+        'avg_cache_writes':          avg_cw,
+        'avg_cache_reads':           avg_cr,
+        'cache_engaged_sessions':    cache_engaged,
+        'cache_blind_sessions':      cache_blind,
+        'orient_tokens_per_session': orient_tok_per_session,
+        'orient_cost_per_session':   orient_cost_per_session,
+        'sessions_per_month':        sessions_per_month,
+        'monthly_orient_cost':       monthly_orient_cost,
+        'projects':                  project_summaries,
+        'weekly':                    weekly,
+        'recent':                    recent,
+    }
+
+
+def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
+              as_json: bool = False) -> None:
+    """Print an orientation-tax audit for the repo (or all projects)."""
+
+    data = collect_audit(repo_root, days=days, all_projects=all_projects)
+
+    if data is None:
+        if not all_projects and _project_transcript_dir(repo_root) is None:
+            print("No Claude Code transcripts found for this repo.")
+            print("  (Expected: ~/.claude/projects/" +
+                  repo_root.replace(os.sep, '-').lstrip('-') + "/)")
+        else:
+            print(f"No sessions found in the last {days} days.")
+        return
+
+    if as_json:
+        print(json.dumps(data, indent=2))
+        return
+
+    band_label = {
+        'good':   '✓ good',
+        'normal': '~ normal',
+        'high':   '⚠ high — context may not be landing',
+    }[data['ratio_band']]
+
+    total = data['sessions']
 
     print(f"\nOrientation tax audit — last {days} days\n")
     print(f"  Sessions analysed:              {total}")
-    print(f"  Avg reads/session:              {avg_reads:.1f}")
-    print(f"  Avg reads before first edit:    {avg_rbe:.1f}  ← primary metric")
-    print(f"  Avg edits/session:              {avg_edits:.1f}")
-    print(f"  Avg read-to-edit ratio:         {avg_ratio:.1f}×  {ratio_label}")
-    print(f"  Avg cache writes/session:       {avg_cw:,.0f} tokens")
+    print(f"  Avg reads/session:              {data['avg_reads']:.1f}")
+    print(f"  Avg reads before first edit:    {data['avg_reads_before_edit']:.1f}  ← primary metric")
+    print(f"  Avg edits/session:              {data['avg_edits']:.1f}")
+    print(f"  Avg read-to-edit ratio:         {data['avg_ratio']:.1f}×  {band_label}")
+    print(f"  Avg cache writes/session:       {data['avg_cache_writes']:,.0f} tokens")
+    print(f"  Cache engagement:               {data['cache_engaged_sessions']}/{total} sessions read from cache")
+    if data['cache_blind_sessions']:
+        print(f"    ⚠ {data['cache_blind_sessions']} session(s) wrote cache but never read it — "
+              f"check that prompt caching is engaging")
     print()
-    print(f"  Est. orientation tokens/session: ~{orient_tok_per_session:,.0f}")
-    print(f"  Est. orientation cost/session:   ~${orient_cost_per_session:.4f}  (Sonnet, base input)")
-    print(f"  Est. monthly orientation tax:    ~${monthly_orient_cost:.2f}  ({sessions_per_month:.0f} sessions/month)")
+    print(f"  Est. orientation tokens/session: ~{data['orient_tokens_per_session']:,.0f}")
+    print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  (Sonnet, base input)")
+    print(f"  Est. monthly orientation tax:    ~${data['monthly_orient_cost']:.2f}  "
+          f"({data['sessions_per_month']:.0f} sessions/month)")
     print(f"  Note: cost is modelled from reads_before_edit ({AUDIT_TOK_PER_FILE:,} tok/file assumed); "
           f"the ratio is the measured signal.")
     print()
     print(f"  Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing")
 
-    if all_projects and len(project_summaries) > 1:
+    if all_projects and len(data['projects']) > 1:
         print(f"\n  Per-project breakdown:")
         print(f"  {'Project':<45} {'Sessions':>8} {'Reads/s':>8} {'RBE':>6} {'CW/s':>12}")
         print(f"  {'-'*45} {'-'*8} {'-'*8} {'-'*6} {'-'*12}")
-        for name, n, reads, rbe, cw in sorted(project_summaries, key=lambda x: -x[3]):
+        for name, n, reads, rbe, cw in sorted(data['projects'], key=lambda x: -x[3]):
             short = name[-43:] if len(name) > 43 else name
             print(f"  {short:<45} {n:>8} {reads:>8.1f} {rbe:>6.1f} {cw:>12,.0f}")
 
@@ -240,6 +309,8 @@ def main() -> None:
                         help='Look back N days (default: 30)')
     parser.add_argument('--all', action='store_true', dest='all_projects',
                         help='Show all projects, not just this repo')
+    parser.add_argument('--json', action='store_true', dest='as_json',
+                        help='Emit structured JSON instead of the text report')
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
 
@@ -249,7 +320,7 @@ def main() -> None:
     except Exception:
         root = start
 
-    run_audit(root, days=args.days, all_projects=args.all_projects)
+    run_audit(root, days=args.days, all_projects=args.all_projects, as_json=args.as_json)
 
 
 if __name__ == '__main__':

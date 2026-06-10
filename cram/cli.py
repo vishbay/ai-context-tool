@@ -15,13 +15,13 @@ Commands:
   decide      "<decision>" [path]          Append an architectural decision to DECISIONS.md
   decisions   [--mine] [--days N] [path]   Show decisions; --mine extracts drafts from git log
   gotcha      "<trap>" [path]              Append a non-obvious trap to GOTCHAS.md
-  audit       [--days N] [--all]           Measure orientation tax from Claude Code transcripts
+  audit       [--days N] [--all] [--json]  Measure orientation tax from Claude Code transcripts
   benchmark   [path]                       Show token savings vs full-repo auto-indexing
   status      [path]                       Show .ai-context/ freshness
   doctor      [path]                       Check setup: models, hooks, git, context files
   hook        install|uninstall [path]     Manage the git post-commit hook
   mcp         [--repo PATH]                Start MCP server (stdio) for Claude Code / agents
-  ui          [path]                       Launch TUI dashboard (requires cram-ai[tui])
+  ui          [path]                       Launch TUI dashboard, Audit tab first (requires cram-ai[tui])
 
 --target choices: cursor | claude | copilot | codex | windsurf | all
   Set a default in .ai-context/config.toml:  [task] default_target = "cursor"

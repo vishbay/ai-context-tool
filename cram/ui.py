@@ -107,7 +107,7 @@ def _build_app(root: str):  # noqa: ANN202
     from textual.worker import WorkerState
 
     from cram.context_dir import context_path
-    from cram.audit import _analyze_transcript, _project_transcript_dir
+    from cram.audit import _analyze_transcript, _project_transcript_dir, collect_audit
     from cram.health import context_health
 
     DECISIONS_FILE = 'DECISIONS.md'
@@ -255,6 +255,90 @@ def _build_app(root: str):  # noqa: ANN202
         def pending_count(self) -> int:
             _, entries = self._load()
             return sum(1 for e in entries if e['pending'])
+
+    # ── Audit pane ───────────────────────────────────────────────
+
+    _BAND_STYLE = {
+        'good':   ('green',  '✓ good'),
+        'normal': ('yellow', '~ normal'),
+        'high':   ('red',    "⚠ high — context isn't landing"),
+    }
+
+    class AuditPane(VerticalScroll):
+        """The landing tab: the orientation-tax numbers, not the knobs."""
+
+        def compose(self) -> ComposeResult:
+            yield Static('', id='audit-body')
+
+        def on_mount(self) -> None:
+            self.refresh_audit()
+
+        def refresh_audit(self) -> None:
+            try:
+                self._refresh_audit_inner()
+            except Exception as ex:
+                try:
+                    self.query_one('#audit-body', Static).update(
+                        f'[red]Error loading audit data: {ex}[/red]'
+                    )
+                except Exception:
+                    pass
+
+        def _refresh_audit_inner(self) -> None:
+            data = collect_audit(root, days=30)
+            body = self.query_one('#audit-body', Static)
+            if data is None:
+                body.update(
+                    '[dim]No Claude Code sessions found for this repo in the last '
+                    '30 days.\nTranscripts are read from ~/.claude/projects/.[/dim]'
+                )
+                return
+
+            color, label = _BAND_STYLE.get(data['ratio_band'],
+                                           ('white', data['ratio_band']))
+            lines = [
+                f'[b]Orientation tax — last {data["days"]} days[/b]\n',
+                f'  Sessions analysed          {data["sessions"]}',
+                f'  Reads before first edit    {data["avg_reads_before_edit"]:.1f}   [dim]← primary metric[/dim]',
+                f'  Read-to-edit ratio         {data["avg_ratio"]:.1f}×  [{color}]{label}[/{color}]',
+                f'  Cache writes / session     {data["avg_cache_writes"]:,.0f} tok',
+                f'  Cache reads / session      {data["avg_cache_reads"]:,.0f} tok',
+                '',
+                '[b]Cache engagement[/b]',
+            ]
+            engaged = data['cache_engaged_sessions']
+            blind   = data['cache_blind_sessions']
+            total   = data['sessions']
+            if engaged:
+                lines.append(
+                    f'  [green]✓ {engaged}/{total} sessions read from the prompt cache[/green]'
+                )
+            if blind:
+                lines.append(
+                    f'  [red]⚠ {blind} session(s) wrote cache but never read it — '
+                    'caching may not be engaging[/red]'
+                )
+            if not engaged and not blind:
+                lines.append('  [dim]No cache usage data in these transcripts.[/dim]')
+
+            if data['weekly']:
+                lines += ['', '[b]Trend — reads before first edit (weekly avg)[/b]']
+                max_rbe = max(avg for _, avg, _ in data['weekly']) or 1.0
+                for wk, avg, n in data['weekly']:
+                    filled = int(round((avg / max_rbe) * 10))
+                    bar = '█' * filled + '░' * (10 - filled)
+                    plural = 's' if n != 1 else ''
+                    lines.append(
+                        f'  {wk}  {bar} {avg:5.1f}  [dim]({n} session{plural})[/dim]'
+                    )
+
+            lines += [
+                '',
+                f'[dim]Modeled orientation cost: ~${data["orient_cost_per_session"]:.4f}/session · '
+                f'~${data["monthly_orient_cost"]:.2f}/month — the ratio is the measured signal.[/dim]',
+                "[dim]Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing[/dim]",
+            ]
+            body.update('\n'.join(lines))
 
     # ── Sessions pane ────────────────────────────────────────────
 
@@ -539,7 +623,7 @@ def _build_app(root: str):  # noqa: ANN202
     class CramApp(App):
         TITLE = 'cram-ai'
         CSS = """
-        DecisionsPane, SessionsPane, HealthPane, ActionsPane {
+        AuditPane, DecisionsPane, SessionsPane, HealthPane, ActionsPane {
             padding: 1 2;
         }
         Label#pending-header, Label#accepted-header, Label#slots-header,
@@ -606,11 +690,13 @@ def _build_app(root: str):  # noqa: ANN202
 
         def compose(self) -> ComposeResult:
             yield Header()
-            with TabbedContent(initial='decisions'):
-                with TabPane('Decisions', id='decisions'):
-                    yield DecisionsPane(id='decisions-pane')
+            with TabbedContent(initial='audit'):
+                with TabPane('Audit', id='audit'):
+                    yield AuditPane(id='audit-pane')
                 with TabPane('Sessions', id='sessions'):
                     yield SessionsPane(id='sessions-pane')
+                with TabPane('Decisions', id='decisions'):
+                    yield DecisionsPane(id='decisions-pane')
                 with TabPane('Health', id='health'):
                     yield HealthPane(id='health-pane')
                 with TabPane('History', id='history'):
@@ -626,6 +712,7 @@ def _build_app(root: str):  # noqa: ANN202
         def on_tabbed_content_tab_activated(self, event) -> None:
             pane_id = event.pane.id if event.pane else None
             refresh_map = {
+                'audit':     ('#audit-pane',     'refresh_audit'),
                 'decisions': ('#decisions-pane', 'refresh_decisions'),
                 'sessions':  ('#sessions-pane',  'refresh_sessions'),
                 'health':    ('#health-pane',    'refresh_health'),
@@ -670,6 +757,7 @@ def _build_app(root: str):  # noqa: ANN202
 
         def action_refresh(self) -> None:
             for widget_id, method in [
+                ('#audit-pane',     'refresh_audit'),
                 ('#decisions-pane', 'refresh_decisions'),
                 ('#sessions-pane',  'refresh_sessions'),
                 ('#health-pane',    'refresh_health'),
@@ -746,7 +834,8 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         prog='cram ui',
-        description='TUI dashboard — decisions, session efficiency, context health',
+        description='TUI dashboard — orientation-tax audit, session efficiency, '
+                    'decisions, context health',
     )
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()

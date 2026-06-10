@@ -62,8 +62,8 @@ def load_custom_targets(root: str) -> dict[str, dict]:
     """Load [targets.<name>] sections from config.toml.
 
     Each section may contain:
-      file      = "AURA.md"           (required) path relative to repo root
-      indicator = "aura.config.json"  (optional) file/dir that signals tool is active
+      file      = "ACME.md"           (required) path relative to repo root
+      indicator = "acme.config.json"  (optional) file/dir that signals tool is active
       upsert    = true                (optional) use cram markers instead of overwriting
 
     Returns {name: {file, indicator, upsert}}.
