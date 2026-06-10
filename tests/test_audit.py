@@ -204,6 +204,92 @@ class TestCollectAudit:
         assert 'ratio_band' in parsed
 
 
+class TestContextBloat:
+    """Bucket-2 metrics: context growth, oversized tool results, redundant reads."""
+
+    def _write_raw(self, path, messages):
+        with open(path, 'w') as f:
+            for msg in messages:
+                f.write(json.dumps(msg) + '\n')
+
+    def _usage(self, cache_read, input_tokens=0):
+        return {'usage': {'cache_creation_input_tokens': 0,
+                          'cache_read_input_tokens': cache_read,
+                          'input_tokens': input_tokens}}
+
+    def test_no_usage_blocks_yields_zero_bloat_fields(self, tmp_path):
+        path = _make_transcript([('Read', {}), ('Edit', {})], tmp_path)
+        r = _analyze_transcript(path)
+        assert r['requests'] == 0
+        assert r['avg_context_per_request'] == 0.0
+        assert r['peak_context'] == 0
+        assert r['tail_share'] is None
+        assert r['carried_read_tokens'] == 0
+
+    def test_context_growth_and_tail_share(self, tmp_path):
+        # 6 requests with linearly growing context: 10k..60k.
+        # Last third = requests 5,6 → (50+60)/210 ≈ 0.524
+        path = str(tmp_path / 's.jsonl')
+        self._write_raw(path, [self._usage(k * 10_000) for k in range(1, 7)])
+        r = _analyze_transcript(path)
+        assert r['requests'] == 6
+        assert abs(r['avg_context_per_request'] - 35_000) < 1
+        assert r['peak_context'] == 60_000
+        assert abs(r['tail_share'] - 110 / 210) < 0.01
+
+    def test_tail_share_none_for_short_sessions(self, tmp_path):
+        path = str(tmp_path / 's.jsonl')
+        self._write_raw(path, [self._usage(10_000) for _ in range(5)])
+        r = _analyze_transcript(path)
+        assert r['tail_share'] is None
+
+    def test_oversized_result_and_carried_tokens(self, tmp_path):
+        # Big result lands after 2 requests; 4 more requests follow → carried
+        # tokens = est_tokens × 4.
+        path = str(tmp_path / 's.jsonl')
+        big = {'type': 'tool_result', 'content': 'x' * 30_000}
+        msgs = ([self._usage(10_000)] * 2 + [big] + [self._usage(10_000)] * 4)
+        self._write_raw(path, msgs)
+        r = _analyze_transcript(path)
+        assert r['big_results'] == 1
+        est_tokens = len(json.dumps('x' * 30_000)) // 4
+        assert r['carried_read_tokens'] == est_tokens * 4
+
+    def test_small_result_not_counted(self, tmp_path):
+        path = str(tmp_path / 's.jsonl')
+        self._write_raw(path, [{'type': 'tool_result', 'content': 'small'}])
+        r = _analyze_transcript(path)
+        assert r['big_results'] == 0
+
+    def test_redundant_reads_counted(self, tmp_path):
+        path = _make_transcript([
+            ('Read', {'file_path': 'a.py'}),
+            ('Read', {'file_path': 'a.py'}),
+            ('Read', {'file_path': 'a.py'}),
+            ('Read', {'file_path': 'b.py'}),
+        ], tmp_path)
+        r = _analyze_transcript(path)
+        assert r['redundant_reads'] == 2
+
+    def test_collect_audit_aggregates_bloat(self, tmp_path, monkeypatch):
+        import cram.audit as _audit_mod
+        td = tmp_path / 'transcripts' / 'proj'
+        td.mkdir(parents=True)
+        msgs = ([self._usage(10_000)] * 2 +
+                [{'type': 'tool_result', 'content': 'x' * 30_000}] +
+                [self._usage(20_000)] * 4)
+        self._write_raw(str(td / 's0.jsonl'), msgs)
+        monkeypatch.setattr(_audit_mod, '_project_transcript_dir',
+                            lambda repo_root: str(td))
+        data = collect_audit(str(tmp_path), days=365)
+        assert data['avg_requests'] == 6
+        assert data['peak_context'] == 20_000
+        assert data['sessions_with_big_results'] == 1
+        assert data['carried_cost_per_session'] > 0
+        assert data['bloat_sessions_measured'] == 1
+        assert 'big_result_bytes' in data
+
+
 class TestFindAllToolUse:
     def test_finds_top_level(self):
         obj = {'type': 'tool_use', 'name': 'Read', 'input': {}}

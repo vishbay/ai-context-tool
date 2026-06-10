@@ -321,6 +321,40 @@ def _build_app(root: str):  # noqa: ANN202
             if not engaged and not blind:
                 lines.append('  [dim]No cache usage data in these transcripts.[/dim]')
 
+            if data['avg_requests']:
+                lines += ['', '[b]Context bloat[/b]']
+                lines.append(f'  Requests / session         {data["avg_requests"]:.0f}')
+                lines.append(
+                    f'  Context per request        {data["avg_context_per_request"]:,.0f} tok'
+                    f'  [dim](peak {data["peak_context"]:,})[/dim]'
+                )
+                tail = data['bloat_tail_share']
+                if tail is not None:
+                    if tail <= 0.36:
+                        tcolor, tlabel = 'green', 'flat'
+                    elif tail <= 0.5:
+                        tcolor, tlabel = 'yellow', 'growing'
+                    else:
+                        tcolor, tlabel = 'red', 'compounding'
+                    lines.append(
+                        f'  Read-cost in last ⅓        {tail * 100:.0f}%  '
+                        f'[{tcolor}]{tlabel}[/{tcolor}]  [dim](33% = flat)[/dim]'
+                    )
+                if data['sessions_with_big_results']:
+                    kb = data['big_result_bytes'] // 1000
+                    lines.append(
+                        f'  Oversized tool results     [yellow]{data["sessions_with_big_results"]}'
+                        f'/{total} sessions carried a result > {kb} KB[/yellow]'
+                    )
+                    lines.append(
+                        f'  Carried read cost          ~${data["carried_cost_per_session"]:.4f}/session'
+                        f'  [dim](re-read every turn)[/dim]'
+                    )
+                if data['avg_redundant_reads'] >= 0.5:
+                    lines.append(
+                        f'  Redundant re-reads         {data["avg_redundant_reads"]:.1f}/session'
+                    )
+
             if data['weekly']:
                 lines += ['', '[b]Trend — reads before first edit (weekly avg)[/b]']
                 max_rbe = max(avg for _, avg, _ in data['weekly']) or 1.0

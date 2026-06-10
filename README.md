@@ -266,8 +266,10 @@ Six tabs:
 
 - **Audit** (default) — the orientation-tax numbers for the last 30 days: reads before
   first edit, read-to-edit ratio with band, cache writes/reads per session, a
-  cache-engagement check (sessions that wrote cache but never read it back), and a
-  weekly trend of the primary metric. The dashboard opens on the number, not the knobs.
+  cache-engagement check (sessions that wrote cache but never read it back),
+  context-bloat metrics (context per request, read-cost tail share, carried cost of
+  oversized tool results, redundant re-reads), and a weekly trend of the primary
+  metric. The dashboard opens on the number, not the knobs.
 - **Decisions** — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
 - **Sessions** — recent Claude Code sessions with reads, edits, read-to-edit ratio, and
@@ -312,6 +314,12 @@ Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
 The cache-engagement line is the silent-failure check: a session that wrote cache but
 never read it back paid the 1.25× write price for nothing — a signal that prompt
 caching isn't engaging (prefix instability, sub-floor prefix, or a misconfigured proxy).
+
+The report also measures **context bloat** — usually the largest waste bucket: average
+context re-read per request, the share of read-cost in the final third of turns
+(33% = flat; higher means the context is growing), the *carried cost* of oversized
+tool results (a big result entering at turn k is re-read by every later turn), and
+redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20000).
 
 Run before and after adopting cram to measure the reduction.
 

@@ -21,6 +21,12 @@ AUDIT_TOK_PER_FILE: int = int(os.environ.get('CRAM_AUDIT_TOK_PER_FILE', '2500'))
 # Sonnet base input price per token (USD).
 # Override with: CRAM_AUDIT_BASE_PRICE=0.000003
 AUDIT_BASE_PRICE: float = float(os.environ.get('CRAM_AUDIT_BASE_PRICE', str(3.0 / 1_000_000)))
+# A tool result above this serialized size counts as oversized — it gets
+# carried (re-read) by every subsequent request in the session.
+# Override with: CRAM_AUDIT_BIG_RESULT_BYTES=20000
+BIG_RESULT_BYTES: int = int(os.environ.get('CRAM_AUDIT_BIG_RESULT_BYTES', '20000'))
+# Cache reads are billed at 0.1x the base input price.
+CACHE_READ_MULT = 0.1
 
 
 def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
@@ -37,6 +43,24 @@ def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
         results = []
         for item in obj:
             results.extend(_find_all_tool_use(item, depth + 1))
+        return results
+    return []
+
+
+def _find_tool_results(obj: object, depth: int = 0) -> list[dict]:
+    if depth > 8:
+        return []
+    if isinstance(obj, dict):
+        if obj.get('type') == 'tool_result':
+            return [obj]
+        results: list[dict] = []
+        for v in obj.values():
+            results.extend(_find_tool_results(v, depth + 1))
+        return results
+    if isinstance(obj, list):
+        results = []
+        for item in obj:
+            results.extend(_find_tool_results(item, depth + 1))
         return results
     return []
 
@@ -67,6 +91,12 @@ def _analyze_transcript(path: str) -> dict | None:
     cache_writes = 0
     cache_reads = 0
 
+    # Bucket-2 (context bloat) signals
+    ctx_per_req: list[int] = []                       # context size at each request
+    big_results = 0
+    big_result_positions: list[tuple[int, int]] = []  # (requests seen so far, est. tokens)
+    read_counts: dict[str, int] = {}                  # file_path → Read count
+
     try:
         with open(path, errors='ignore') as f:
             for line in f:
@@ -90,6 +120,10 @@ def _analyze_transcript(path: str) -> dict | None:
                         reads += 1
                         if not first_edit_seen:
                             reads_before_edit += 1
+                        if name in READ_TOOLS and isinstance(inp, dict):
+                            fpath = inp.get('file_path', '')
+                            if fpath:
+                                read_counts[fpath] = read_counts.get(fpath, 0) + 1
                     if is_write:
                         edits += 1
                         if not first_edit_seen:
@@ -98,19 +132,53 @@ def _analyze_transcript(path: str) -> dict | None:
                 for u in _find_usage(msg):
                     cache_writes += u.get('cache_creation_input_tokens', 0)
                     cache_reads  += u.get('cache_read_input_tokens', 0)
+                    ctx_per_req.append(
+                        u.get('cache_read_input_tokens', 0) + u.get('input_tokens', 0)
+                    )
+
+                for tr in _find_tool_results(msg):
+                    try:
+                        size = len(json.dumps(tr.get('content', '')))
+                    except Exception:
+                        size = 0
+                    if size > BIG_RESULT_BYTES:
+                        big_results += 1
+                        big_result_positions.append((len(ctx_per_req), size // 4))
 
     except Exception:
         return None
 
+    requests  = len(ctx_per_req)
+    total_ctx = sum(ctx_per_req)
+    # Share of read-cost incurred in the last third of requests. With a flat
+    # context this is ~33%; higher means the context is growing — bloat.
+    # Only meaningful with enough requests to split into thirds.
+    tail_share = (
+        sum(ctx_per_req[2 * requests // 3:]) / total_ctx
+        if requests >= 6 and total_ctx else None
+    )
+    # An oversized result entering at request k is re-read by every one of the
+    # remaining (requests - k) requests.
+    carried_read_tokens = sum(
+        tok * max(requests - k, 0) for k, tok in big_result_positions
+    )
+
     ratio = reads_before_edit / max(edits, 1)
     return {
-        'reads':             reads,
-        'reads_before_edit': reads_before_edit,
-        'edits':             edits,
-        'ratio':             ratio,
-        'cache_writes':      cache_writes,
-        'cache_reads':       cache_reads,
-        'mtime':             os.path.getmtime(path),
+        'reads':                   reads,
+        'reads_before_edit':       reads_before_edit,
+        'edits':                   edits,
+        'ratio':                   ratio,
+        'cache_writes':            cache_writes,
+        'cache_reads':             cache_reads,
+        'requests':                requests,
+        'avg_context_per_request': total_ctx / requests if requests else 0.0,
+        'peak_context':            max(ctx_per_req) if ctx_per_req else 0,
+        'tail_share':              tail_share,
+        'big_results':             big_results,
+        'carried_read_tokens':     carried_read_tokens,
+        'redundant_reads':         sum(c - 1 for c in read_counts.values() if c > 1),
+        'mtime':                   os.path.getmtime(path),
     }
 
 
@@ -198,6 +266,21 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
     cache_blind   = sum(1 for s in all_sessions
                         if s['cache_writes'] > 0 and s['cache_reads'] == 0)
 
+    # Bucket 2: context bloat
+    with_reqs        = [s for s in all_sessions if s['requests']]
+    avg_requests     = sum(s['requests'] for s in all_sessions) / total
+    avg_ctx_per_req  = (sum(s['avg_context_per_request'] for s in with_reqs) / len(with_reqs)
+                        if with_reqs else 0.0)
+    peak_context     = max((s['peak_context'] for s in all_sessions), default=0)
+    tails            = [s['tail_share'] for s in all_sessions if s['tail_share'] is not None]
+    bloat_tail_share = sum(tails) / len(tails) if tails else None
+    sessions_with_big_results = sum(1 for s in all_sessions if s['big_results'])
+    carried_cost_per_session  = (
+        sum(s['carried_read_tokens'] for s in all_sessions) / total
+        * CACHE_READ_MULT * AUDIT_BASE_PRICE
+    )
+    avg_redundant_reads = sum(s['redundant_reads'] for s in all_sessions) / total
+
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
     # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
     orient_tok_per_session  = avg_rbe * AUDIT_TOK_PER_FILE
@@ -226,6 +309,15 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
         'avg_cache_reads':           avg_cr,
         'cache_engaged_sessions':    cache_engaged,
         'cache_blind_sessions':      cache_blind,
+        'avg_requests':              avg_requests,
+        'avg_context_per_request':   avg_ctx_per_req,
+        'peak_context':              peak_context,
+        'bloat_tail_share':          bloat_tail_share,
+        'bloat_sessions_measured':   len(tails),
+        'sessions_with_big_results': sessions_with_big_results,
+        'carried_cost_per_session':  carried_cost_per_session,
+        'avg_redundant_reads':       avg_redundant_reads,
+        'big_result_bytes':          BIG_RESULT_BYTES,
         'orient_tokens_per_session': orient_tok_per_session,
         'orient_cost_per_session':   orient_cost_per_session,
         'sessions_per_month':        sessions_per_month,
@@ -274,6 +366,25 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
     if data['cache_blind_sessions']:
         print(f"    ⚠ {data['cache_blind_sessions']} session(s) wrote cache but never read it — "
               f"check that prompt caching is engaging")
+
+    if data['avg_requests']:
+        print()
+        print(f"  Context bloat:")
+        print(f"    Avg requests/session:         {data['avg_requests']:.0f}")
+        print(f"    Avg context per request:      {data['avg_context_per_request']:,.0f} tokens"
+              f"  (peak {data['peak_context']:,})")
+        if data['bloat_tail_share'] is not None:
+            n_measured = data['bloat_sessions_measured']
+            print(f"    Read-cost in last 1/3 turns:  {data['bloat_tail_share'] * 100:.0f}%"
+                  f"  ({n_measured} session{'s' if n_measured != 1 else ''} measured; 33% = flat)")
+        if data['sessions_with_big_results']:
+            kb = data['big_result_bytes'] // 1000
+            print(f"    Oversized tool results:       {data['sessions_with_big_results']}/{total} "
+                  f"sessions carried a result > {kb} KB")
+            print(f"    Est. carried read cost:       ~${data['carried_cost_per_session']:.4f}/session"
+                  f"  (oversized results re-read every turn)")
+        if data['avg_redundant_reads'] >= 0.5:
+            print(f"    Redundant same-file reads:    {data['avg_redundant_reads']:.1f}/session")
     print()
     print(f"  Est. orientation tokens/session: ~{data['orient_tokens_per_session']:,.0f}")
     print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  (Sonnet, base input)")

@@ -42,11 +42,13 @@ discipline held constant. `cram audit` before/after per cohort. This is the numb
 the pivot stands on. **Do this before building more.**
 
 ### P1 — Deepen the audit (buckets 2–5)
-- Extend `cram/audit.py`: per-session cache-read totals vs message count (bucket 2),
-  oversized tool results (bucket 4), cache-engagement ratio (bucket 5).
-- Add `--json` output so other surfaces (TUI, future dashboard) consume data, not text.
-- Per-provider cost model table in `cost_model.py` (Anthropic / OpenAI / Gemini / local)
-  so dollar attribution is pluggable, not hardcoded to Sonnet pricing.
+- ~~Extend `cram/audit.py`: context-per-request, read-cost tail share, carried cost of
+  oversized tool results, redundant re-reads (bucket 2 + 4), cache-engagement ratio
+  (bucket 5)~~ **done** — surfaced in CLI report, `--json`, and the TUI Audit tab.
+- ~~Add `--json` output so other surfaces consume data, not text~~ **done**.
+- Remaining: retry-loop detection (bucket 3), per-provider cost model table in
+  `cost_model.py` (Anthropic / OpenAI / Gemini / local) so dollar attribution is
+  pluggable, not hardcoded to Sonnet pricing.
 
 ### P2 — Audit-first `cram ui`
 - New **Audit** tab as the default landing tab: headline metrics (reads-before-first-edit,
