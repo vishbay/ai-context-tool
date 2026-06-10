@@ -363,30 +363,39 @@ def _build_app(root: str):  # noqa: ANN202
 
         def refresh_history(self) -> None:
             import json as _json
+            from cram.session import load_session
+
+            lines = ['[b]Recent Tasks[/b]\n']
+
+            # Show the active session task at the top (it hasn't been archived yet)
+            session = load_session(root)
+            if session and session.get('task') and not session['task'].startswith('<!--'):
+                set_at = session.get('set_at', 0)
+                ts = datetime.fromtimestamp(set_at).strftime('%Y-%m-%d %H:%M') if set_at else ''
+                lines.append(f'  [dim]{ts}[/dim]  [green]{session["task"]}[/green]  [dim](active)[/dim]')
+
             history_path = os.path.join(root, '.ai-context', 'TASK_HISTORY.jsonl')
-            if not os.path.exists(history_path):
-                self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
-                return
             try:
                 entries = []
-                with open(history_path, errors='ignore') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            entries.append(_json.loads(line))
+                if os.path.exists(history_path):
+                    with open(history_path, errors='ignore') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                entries.append(_json.loads(line))
                 entries = [e for e in entries if not e.get('task', '').startswith('<!--')]
-                if not entries:
-                    self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
-                    return
                 entries = entries[::-1]
-                lines = ['[b]Recent Tasks[/b]\n']
                 for e in entries:
                     ts = e.get('ts', '')[:16].replace('T', ' ')
                     task = e.get('task', '')
                     lines.append(f'  [dim]{ts}[/dim]  {task}')
-                self.query_one('#history-body', Static).update('\n'.join(lines))
             except Exception as ex:
-                self.query_one('#history-body', Static).update(f'[red]Error: {ex}[/red]')
+                lines.append(f'[red]Error: {ex}[/red]')
+
+            if len(lines) == 1:
+                self.query_one('#history-body', Static).update('[dim]No task history yet.[/dim]')
+                return
+            self.query_one('#history-body', Static).update('\n'.join(lines))
 
     # ── Actions pane ─────────────────────────────────────────────
 
