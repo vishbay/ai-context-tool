@@ -1,27 +1,33 @@
-"""cram audit — measure orientation tax from Claude Code session transcripts.
-
-Parsing and metric derivation live in cram.audit_events (adapters produce
-normalized Event streams; derive_session replays them). This module keeps the
-public surface: discovery helpers, the legacy _analyze_* entry points (now thin
-parse→derive wrappers), collect_audit, and the CLI report/compare commands.
-"""
+"""cram audit — measure orientation tax from Claude Code session transcripts."""
 
 from __future__ import annotations
 import json
 import os
+import re
 import glob
 import datetime
+import collections
 
-from cram import audit_events
-# Back-compat re-exports: these names lived here before the event-store split
-# and are imported by tests and external callers.
-from cram.audit_events import (  # noqa: F401
-    READ_TOOLS, WRITE_TOOLS, BASH_READ_CMDS,
-    CURSOR_READ_TOOLS, CURSOR_WRITE_TOOLS, CURSOR_BASH_TOOL,
-    _CODEX_WRITE_PATCH_RE,
-    _find_all_tool_use, _find_tool_results, _find_usage,
-    _cursor_files_from_entry,
-)
+
+READ_TOOLS  = frozenset({'Read', 'read_file'})
+WRITE_TOOLS = frozenset({'Write', 'Edit', 'edit_file', 'write_file', 'NotebookEdit'})
+BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ',
+                  'nl ',   # number lines — Codex's preferred file viewer
+                  'sed ',  # sed -n '..p' pattern used by Codex to read ranges
+                  'rg ',   # ripgrep
+                  'ag ',   # the_silver_searcher
+                  'awk ',  # read/extract
+                  )
+
+# ── Cursor tool names ─────────────────────────────────────────────────────────
+CURSOR_READ_TOOLS = frozenset({
+    'read_file', 'view_file', 'view_code_item',
+    'grep_search', 'file_search', 'codebase_search', 'list_directory',
+})
+CURSOR_WRITE_TOOLS = frozenset({
+    'edit_file', 'write_file', 'create_file', 'delete_file', 'apply_changes',
+})
+CURSOR_BASH_TOOL = 'run_terminal_command'
 
 CONTEXT_DIR = '.ai-context'
 
@@ -48,17 +54,182 @@ BIG_RESULT_BYTES: int = int(os.environ.get('CRAM_AUDIT_BIG_RESULT_BYTES', '20000
 CACHE_READ_MULT: float = _PRICING['cache_read_mult']
 
 
+def _find_all_tool_use(obj: object, depth: int = 0) -> list[dict]:
+    if depth > 8:
+        return []
+    if isinstance(obj, dict):
+        if obj.get('type') == 'tool_use':
+            return [obj]
+        results: list[dict] = []
+        for v in obj.values():
+            results.extend(_find_all_tool_use(v, depth + 1))
+        return results
+    if isinstance(obj, list):
+        results = []
+        for item in obj:
+            results.extend(_find_all_tool_use(item, depth + 1))
+        return results
+    return []
+
+
+def _find_tool_results(obj: object, depth: int = 0) -> list[dict]:
+    if depth > 8:
+        return []
+    if isinstance(obj, dict):
+        if obj.get('type') == 'tool_result':
+            return [obj]
+        results: list[dict] = []
+        for v in obj.values():
+            results.extend(_find_tool_results(v, depth + 1))
+        return results
+    if isinstance(obj, list):
+        results = []
+        for item in obj:
+            results.extend(_find_tool_results(item, depth + 1))
+        return results
+    return []
+
+
+def _find_usage(obj: object, depth: int = 0) -> list[dict]:
+    if depth > 8:
+        return []
+    if isinstance(obj, dict):
+        if 'cache_creation_input_tokens' in obj:
+            return [obj]
+        results: list[dict] = []
+        for v in obj.values():
+            results.extend(_find_usage(v, depth + 1))
+        return results
+    if isinstance(obj, list):
+        results: list[dict] = []
+        for item in obj:
+            results.extend(_find_usage(item, depth + 1))
+        return results
+    return []
+
+
 def _analyze_transcript(path: str) -> dict | None:
-    """Parse a Claude Code transcript and return its session metrics dict."""
-    parsed = audit_events.parse_claude(path)
-    if parsed is None:
-        return None
-    meta, events = parsed
+    reads = 0
+    reads_before_edit = 0
+    edits = 0
+    first_edit_seen = False
+    cache_writes = 0
+    cache_reads = 0
+
+    # Bucket-2 (context bloat) signals
+    ctx_per_req: list[int] = []                       # full context size at each request
+    output_per_req: list[int] = []                    # output tokens at each request
+    big_results = 0
+    big_result_positions: list[tuple[int, int]] = []  # (requests seen so far, est. tokens)
+    read_counts: dict[str, int] = {}                  # file_path → Read count
+
+    # Bucket-3 (retry loop) signals
+    error_results = 0                                 # failed tool calls
+    edit_counts: dict[str, int] = {}                  # file_path → Edit/Write count
+
     try:
-        return audit_events.derive_session(meta, events,
-                                           big_result_bytes=BIG_RESULT_BYTES)
+        with open(path, errors='ignore') as f:
+            for line in f:
+                try:
+                    msg = json.loads(line)
+                except Exception:
+                    continue
+
+                for block in _find_all_tool_use(msg):
+                    name = block.get('name', '')
+                    inp  = block.get('input') or {}
+                    cmd  = inp.get('command', '') if isinstance(inp, dict) else ''
+
+                    is_read = (
+                        name in READ_TOOLS or
+                        (name == 'Bash' and any(c in cmd for c in BASH_READ_CMDS))
+                    )
+                    is_write = name in WRITE_TOOLS
+
+                    if is_read:
+                        reads += 1
+                        if not first_edit_seen:
+                            reads_before_edit += 1
+                        if name in READ_TOOLS and isinstance(inp, dict):
+                            fpath = inp.get('file_path', '')
+                            if fpath:
+                                read_counts[fpath] = read_counts.get(fpath, 0) + 1
+                    if is_write:
+                        edits += 1
+                        if not first_edit_seen:
+                            first_edit_seen = True
+                        if isinstance(inp, dict):
+                            fpath = inp.get('file_path', '')
+                            if fpath:
+                                edit_counts[fpath] = edit_counts.get(fpath, 0) + 1
+
+                for u in _find_usage(msg):
+                    cache_writes += u.get('cache_creation_input_tokens', 0)
+                    cache_reads  += u.get('cache_read_input_tokens', 0)
+                    ctx_per_req.append(
+                        u.get('cache_read_input_tokens', 0)
+                        + u.get('input_tokens', 0)
+                        + u.get('cache_creation_input_tokens', 0)
+                    )
+                    output_per_req.append(u.get('output_tokens', 0))
+
+                for tr in _find_tool_results(msg):
+                    if tr.get('is_error'):
+                        error_results += 1
+                    try:
+                        size = len(json.dumps(tr.get('content', '')))
+                    except Exception:
+                        size = 0
+                    if size > BIG_RESULT_BYTES:
+                        big_results += 1
+                        big_result_positions.append((len(ctx_per_req), size // 4))
+
     except Exception:
         return None
+
+    requests  = len(ctx_per_req)
+    total_ctx = sum(ctx_per_req)
+    # Share of read-cost incurred in the last third of requests. With a flat
+    # context this is ~33%; higher means the context is growing — bloat.
+    # Only meaningful with enough requests to split into thirds.
+    tail_share = (
+        sum(ctx_per_req[2 * requests // 3:]) / total_ctx
+        if requests >= 6 and total_ctx else None
+    )
+    # An oversized result entering at request k is re-read by every one of the
+    # remaining (requests - k) requests.
+    carried_read_tokens = sum(
+        tok * max(requests - k, 0) for k, tok in big_result_positions
+    )
+    # How much did context grow over the session? peak / first-request size.
+    # > 2× = growing, > 5× = heavy bloat. None when there are < 2 requests.
+    first_ctx = ctx_per_req[0] if ctx_per_req else 0
+    context_growth_factor = (
+        max(ctx_per_req) / first_ctx if requests >= 2 and first_ctx else None
+    )
+
+    ratio = reads_before_edit / max(edits, 1)
+    return {
+        'reads':                   reads,
+        'reads_before_edit':       reads_before_edit,
+        'edits':                   edits,
+        'ratio':                   ratio,
+        'cache_writes':            cache_writes,
+        'cache_reads':             cache_reads,
+        'requests':                requests,
+        'avg_context_per_request': total_ctx / requests if requests else 0.0,
+        'peak_context':            max(ctx_per_req) if ctx_per_req else 0,
+        'first_context':           first_ctx,
+        'context_growth_factor':   context_growth_factor,
+        'avg_output_tokens':       sum(output_per_req) / len(output_per_req) if output_per_req else 0.0,
+        'tail_share':              tail_share,
+        'big_results':             big_results,
+        'carried_read_tokens':     carried_read_tokens,
+        'redundant_reads':         sum(c - 1 for c in read_counts.values() if c > 1),
+        'error_results':           error_results,
+        'edit_churn':              sum(c - 1 for c in edit_counts.values() if c > 1),
+        'mtime':                   os.path.getmtime(path),
+    }
 
 
 # ── Cursor support ────────────────────────────────────────────────────────────
@@ -87,43 +258,252 @@ def _cursor_storage_root() -> str | None:
     return None
 
 
+def _cursor_files_from_entry(entry: dict) -> list[str]:
+    """Extract referenced file paths from a Cursor agent-transcript entry (deduplicated)."""
+    seen: set[str] = set()
+    files: list[str] = []
+    for f in entry.get('files', []):
+        if isinstance(f, str) and f and f not in seen:
+            seen.add(f)
+            files.append(f)
+    inp = entry.get('input') or entry.get('params') or {}
+    if isinstance(inp, dict):
+        for key in ('target_file', 'file_path', 'path', 'filename'):
+            v = inp.get(key)
+            if isinstance(v, str) and v and v not in seen:
+                seen.add(v)
+                files.append(v)
+    return files
+
+
+def _blank_cursor_session(path: str) -> dict:
+    """Return a zeroed session dict (no token data) for a Cursor session."""
+    return {
+        'reads':                   0,
+        'reads_before_edit':       0,
+        'edits':                   0,
+        'ratio':                   0.0,
+        'cache_writes':            0,
+        'cache_reads':             0,
+        'requests':                0,
+        'avg_context_per_request': 0.0,
+        'peak_context':            0,
+        'first_context':           0,
+        'context_growth_factor':   None,
+        'avg_output_tokens':       0.0,
+        'tail_share':              None,
+        'big_results':             0,
+        'carried_read_tokens':     0,
+        'redundant_reads':         0,
+        'error_results':           0,
+        'edit_churn':              0,
+        'mtime':                   os.path.getmtime(path),
+        'source':                  'cursor',
+    }
+
+
 def _analyze_cursor_transcript(path: str, repo_root: str) -> dict | None:
     """Parse a Cursor agent-transcript JSONL file for tool-call metrics.
 
-    Only events associated with repo_root (via vcs.root or file paths under
-    repo_root) are counted. Returns None if no relevant activity found.
-    Token-based metrics are unavailable for Cursor sessions and are zeroed.
+    Each line is a tool-call event. Only events associated with repo_root
+    (via vcs.root or file paths under repo_root) are counted. Returns None
+    if no relevant activity found.
+
+    Token-based metrics (context size, cache) are unavailable for Cursor
+    sessions and are zeroed out in the returned dict.
     """
-    parsed = audit_events.parse_cursor_jsonl(path)
-    if parsed is None:
-        return None
-    meta, events = parsed
+    reads = 0
+    reads_before_edit = 0
+    edits = 0
+    first_edit_seen = False
+    read_counts: dict[str, int] = {}
+    edit_counts: dict[str, int] = {}
+    repo_sep = repo_root.rstrip(os.sep) + os.sep
+
     try:
-        return audit_events.derive_session(meta, events, repo_root,
-                                           big_result_bytes=BIG_RESULT_BYTES)
+        with open(path, errors='ignore') as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+
+                tool = entry.get('tool') or entry.get('toolName') or ''
+                vcs_root = (entry.get('vcs') or {}).get('root', '')
+                files = _cursor_files_from_entry(entry)
+
+                relevant = (
+                    vcs_root == repo_root
+                    or any(f == repo_root or f.startswith(repo_sep) for f in files)
+                )
+                if not relevant:
+                    continue
+
+                cmd = ''
+                inp = entry.get('input')
+                if isinstance(inp, dict):
+                    cmd = inp.get('command', '')
+
+                is_read = (
+                    tool in CURSOR_READ_TOOLS
+                    or (tool == CURSOR_BASH_TOOL
+                        and any(c in cmd for c in BASH_READ_CMDS))
+                )
+                is_write = tool in CURSOR_WRITE_TOOLS
+
+                if is_read:
+                    reads += 1
+                    if not first_edit_seen:
+                        reads_before_edit += 1
+                    for fp in files:
+                        if fp:
+                            read_counts[fp] = read_counts.get(fp, 0) + 1
+
+                if is_write:
+                    edits += 1
+                    if not first_edit_seen:
+                        first_edit_seen = True
+                    for fp in files:
+                        if fp:
+                            edit_counts[fp] = edit_counts.get(fp, 0) + 1
+
     except Exception:
         return None
+
+    if reads == 0 and edits == 0:
+        return None
+
+    sess = _blank_cursor_session(path)
+    sess.update({
+        'reads':             reads,
+        'reads_before_edit': reads_before_edit,
+        'edits':             edits,
+        'ratio':             reads_before_edit / max(edits, 1),
+        'redundant_reads':   sum(c - 1 for c in read_counts.values() if c > 1),
+        'edit_churn':        sum(c - 1 for c in edit_counts.values() if c > 1),
+    })
+    return sess
 
 
 def _analyze_cursor_workspace_db(db_path: str, repo_root: str,
                                   cutoff: datetime.datetime) -> list[dict]:
     """Parse Cursor workspace SQLite (state.vscdb) for tool-call sessions.
 
-    Returns one session dict per composer session with activity under
-    repo_root since cutoff. Empty list if sqlite3 is unavailable or the
-    schema differs.
+    Reads the cursorDiskKV table for bubbleId:* entries containing toolFormerData.
+    Groups bubbles by composerId and returns one session dict per composer session
+    that has activity under repo_root since cutoff.
+    Falls back to an empty list if sqlite3 is unavailable or the schema differs.
     """
+    try:
+        import sqlite3
+    except ImportError:
+        return []
+
     sessions: list[dict] = []
-    for meta, events in audit_events.parse_cursor_db(db_path):
-        if meta.event_mtime and datetime.datetime.fromtimestamp(meta.event_mtime) < cutoff:
-            continue
+    repo_sep = repo_root.rstrip(os.sep) + os.sep
+
+    try:
+        con = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True,
+                              check_same_thread=False)
+        con.row_factory = sqlite3.Row
         try:
-            r = audit_events.derive_session(meta, events, repo_root,
-                                            big_result_bytes=BIG_RESULT_BYTES)
+            rows = con.execute(
+                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+    # Group bubble rows by composerId (second segment of key).
+    composer_bubbles: dict[str, list[dict]] = {}
+    for row in rows:
+        parts = row['key'].split(':', 2)
+        if len(parts) != 3:
+            continue
+        composer_id = parts[1]
+        try:
+            blob = row['value']
+            bubble = json.loads(blob if isinstance(blob, str) else blob.decode())
         except Exception:
-            r = None
-        if r:
-            sessions.append(r)
+            continue
+        if not isinstance(bubble, dict):
+            continue
+        composer_bubbles.setdefault(composer_id, []).append(bubble)
+
+    for composer_id, bubbles in composer_bubbles.items():
+        reads = 0
+        reads_before_edit = 0
+        edits = 0
+        first_edit_seen = False
+        read_counts: dict[str, int] = {}
+        edit_counts: dict[str, int] = {}
+        mtime: float = 0.0
+        any_relevant = False
+
+        for bubble in sorted(bubbles, key=lambda b: b.get('createdAt', 0)):
+            ts_ms = bubble.get('createdAt', 0)
+            ts = ts_ms / 1000 if ts_ms > 1e10 else float(ts_ms)
+            if ts:
+                mtime = max(mtime, ts)
+
+            for tfd in bubble.get('toolFormerData') or []:
+                if not isinstance(tfd, dict):
+                    continue
+                tool = tfd.get('toolName', '')
+                params = tfd.get('params') or {}
+                files: list[str] = []
+                if isinstance(params, dict):
+                    for key in ('target_file', 'file_path', 'path', 'filename'):
+                        v = params.get(key)
+                        if isinstance(v, str) and v:
+                            files.append(v)
+
+                relevant = any(
+                    f == repo_root or f.startswith(repo_sep) for f in files
+                )
+                if relevant:
+                    any_relevant = True
+
+                is_read  = tool in CURSOR_READ_TOOLS
+                is_write = tool in CURSOR_WRITE_TOOLS
+
+                if is_read:
+                    reads += 1
+                    if not first_edit_seen:
+                        reads_before_edit += 1
+                    for fp in files:
+                        if fp:
+                            read_counts[fp] = read_counts.get(fp, 0) + 1
+                if is_write:
+                    edits += 1
+                    if not first_edit_seen:
+                        first_edit_seen = True
+                    for fp in files:
+                        if fp:
+                            edit_counts[fp] = edit_counts.get(fp, 0) + 1
+
+        if not any_relevant or (reads == 0 and edits == 0):
+            continue
+        if mtime and datetime.datetime.fromtimestamp(mtime) < cutoff:
+            continue
+
+        sess = _blank_cursor_session(db_path)
+        sess.update({
+            'reads':             reads,
+            'reads_before_edit': reads_before_edit,
+            'edits':             edits,
+            'ratio':             reads_before_edit / max(edits, 1),
+            'redundant_reads':   sum(c - 1 for c in read_counts.values() if c > 1),
+            'edit_churn':        sum(c - 1 for c in edit_counts.values() if c > 1),
+            'mtime':             mtime or os.path.getmtime(db_path),
+        })
+        sessions.append(sess)
+
     return sessions
 
 
@@ -162,6 +542,14 @@ def _collect_cursor_sessions(repo_root: str, cutoff: datetime.datetime) -> list[
 
 # ── Codex support ─────────────────────────────────────────────────────────────
 
+# Patterns in exec_command.cmd that indicate a read operation.
+# Codex routes all shell activity through exec_command, so we match on cmd text.
+_CODEX_WRITE_PATCH_RE = re.compile(
+    r'^\*{3}\s+(Add File|Update File|Delete File):\s*(.+)$',
+    re.MULTILINE,
+)
+
+
 def _codex_sessions_dir() -> str | None:
     """Return ~/.codex/sessions/ if it exists."""
     path = os.path.join(os.path.expanduser('~'), '.codex', 'sessions')
@@ -171,19 +559,166 @@ def _codex_sessions_dir() -> str | None:
 def _analyze_codex_transcript(path: str, repo_root: str) -> dict | None:
     """Parse a Codex JSONL session file and return a session dict.
 
-    The session is associated with repo_root via session_meta.cwd or the
-    workdir field of individual exec_command calls. Returns None if no
+    Codex routes all shell activity through ``exec_command`` (a function_call)
+    and file writes through ``apply_patch`` (a custom_tool_call).  Token usage
+    comes from ``event_msg/token_count`` events.
+
+    The session is associated with ``repo_root`` via ``session_meta.cwd`` or
+    the ``workdir`` field of individual exec_command calls.  Returns None if no
     relevant activity is found.
     """
-    parsed = audit_events.parse_codex(path)
-    if parsed is None:
-        return None
-    meta, events = parsed
+    reads = 0
+    reads_before_edit = 0
+    edits = 0
+    first_edit_seen = False
+    read_counts: dict[str, str] = {}   # cmd → dummy (just tracking distinct reads)
+    edit_counts: dict[str, int] = {}   # file_path → edit count
+
+    cache_writes = 0
+    cache_reads = 0
+    ctx_per_req: list[int] = []
+    output_per_req: list[int] = []
+    error_results = 0
+
+    session_cwd: str = ''
+    repo_sep = repo_root.rstrip(os.sep) + os.sep
+
+    def _is_repo(workdir: str) -> bool:
+        return workdir == repo_root or workdir.startswith(repo_sep)
+
     try:
-        return audit_events.derive_session(meta, events, repo_root,
-                                           big_result_bytes=BIG_RESULT_BYTES)
+        with open(path, errors='ignore') as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                t = obj.get('type', '')
+                p = obj.get('payload', {})
+                if not isinstance(p, dict):
+                    continue
+
+                if t == 'session_meta':
+                    session_cwd = p.get('cwd', '') or ''
+
+                # ── per-request token usage ────────────────────────────────
+                if t == 'event_msg' and p.get('type') == 'token_count':
+                    last = (p.get('info') or {}).get('last_token_usage') or {}
+                    inp  = last.get('input_tokens', 0)
+                    cached = last.get('cached_input_tokens', 0)
+                    out  = last.get('output_tokens', 0)
+                    cache_reads += cached
+                    ctx_per_req.append(inp + cached)
+                    output_per_req.append(out)
+                    continue
+
+                if t != 'response_item':
+                    continue
+
+                pt = p.get('type', '')
+
+                # ── exec_command → reads (and occasionally writes) ─────────
+                if pt == 'function_call' and p.get('name') == 'exec_command':
+                    args_raw = p.get('arguments', '')
+                    try:
+                        args = (json.loads(args_raw)
+                                if isinstance(args_raw, str) else args_raw) or {}
+                    except Exception:
+                        args = {}
+                    cmd     = args.get('cmd', '')     if isinstance(args, dict) else ''
+                    workdir = args.get('workdir', '') if isinstance(args, dict) else ''
+                    wd      = workdir or session_cwd
+
+                    if not _is_repo(wd):
+                        continue
+
+                    is_read = any(c in cmd for c in BASH_READ_CMDS)
+                    if is_read:
+                        reads += 1
+                        if not first_edit_seen:
+                            reads_before_edit += 1
+
+                # ── apply_patch → writes ───────────────────────────────────
+                elif pt == 'custom_tool_call' and p.get('name') == 'apply_patch':
+                    patch_text = p.get('input', '')
+                    files_in_patch: list[str] = []
+                    for m in _CODEX_WRITE_PATCH_RE.finditer(str(patch_text)):
+                        fp = m.group(2).strip()
+                        if fp:
+                            files_in_patch.append(fp)
+
+                    # If the patch names explicit paths, require at least one in repo.
+                    # Fall back to session_cwd only when no paths are parseable.
+                    if files_in_patch:
+                        if not any(fp == repo_root or fp.startswith(repo_sep)
+                                   for fp in files_in_patch):
+                            continue
+                    elif not _is_repo(session_cwd):
+                        continue
+
+                    edits += 1
+                    if not first_edit_seen:
+                        first_edit_seen = True
+                    for fp in files_in_patch:
+                        edit_counts[fp] = edit_counts.get(fp, 0) + 1
+
+                # ── failed exec outputs ────────────────────────────────────
+                elif pt == 'function_call_output':
+                    out = p.get('output', '')
+                    # Exit codes > 1 in exec output indicate genuine tool failures
+                    # (code 1 is common for grep-no-match, so we skip it)
+                    if isinstance(out, str) and 'Process exited with code' in out:
+                        for code in range(2, 128):
+                            if f'code {code}' in out:
+                                error_results += 1
+                                break
+
     except Exception:
         return None
+
+    # Reject session if cwd doesn't match repo_root and we have no other signal
+    if session_cwd and not _is_repo(session_cwd) and reads == 0 and edits == 0:
+        return None
+    if reads == 0 and edits == 0:
+        return None
+
+    requests  = len(ctx_per_req)
+    total_ctx = sum(ctx_per_req)
+    tail_share = (
+        sum(ctx_per_req[2 * requests // 3:]) / total_ctx
+        if requests >= 6 and total_ctx else None
+    )
+    first_ctx = ctx_per_req[0] if ctx_per_req else 0
+    context_growth_factor = (
+        max(ctx_per_req) / first_ctx if requests >= 2 and first_ctx else None
+    )
+
+    ratio = reads_before_edit / max(edits, 1)
+    return {
+        'reads':                   reads,
+        'reads_before_edit':       reads_before_edit,
+        'edits':                   edits,
+        'ratio':                   ratio,
+        'cache_writes':            cache_writes,
+        'cache_reads':             cache_reads,
+        'requests':                requests,
+        'avg_context_per_request': total_ctx / requests if requests else 0.0,
+        'peak_context':            max(ctx_per_req) if ctx_per_req else 0,
+        'first_context':           first_ctx,
+        'context_growth_factor':   context_growth_factor,
+        'avg_output_tokens':       sum(output_per_req) / len(output_per_req) if output_per_req else 0.0,
+        'tail_share':              tail_share,
+        'big_results':             0,
+        'carried_read_tokens':     0,
+        'redundant_reads':         0,
+        'error_results':           error_results,
+        'edit_churn':              sum(c - 1 for c in edit_counts.values() if c > 1),
+        'mtime':                   os.path.getmtime(path),
+        'source':                  'codex',
+    }
 
 
 def _collect_codex_sessions(repo_root: str, cutoff: datetime.datetime) -> list[dict]:
