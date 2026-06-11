@@ -435,6 +435,19 @@ def _collect_audit_inner(store, repo_root: str, days: int,
     orient_spend_cost       = (orient_spend_eff_tokens * AUDIT_BASE_PRICE
                                if orient_spend_eff_tokens is not None else None)
 
+    # Per-file evidence: total reads per file across sessions, and in how many
+    # sessions each file was read. Cross-session repetition is the orientation
+    # signal ("every session re-reads audit.py" → belongs in a repo briefing).
+    file_reads: dict[str, list[int]] = {}
+    for s in all_sessions:
+        for fp, c in s['read_file_counts'].items():
+            agg = file_reads.setdefault(fp, [0, 0])
+            agg[0] += c
+            agg[1] += 1
+    top_read_files = sorted(
+        ((fp, r, n) for fp, (r, n) in file_reads.items()),
+        key=lambda t: (-t[1], -t[2], t[0]))[:10]
+
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
     # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
     orient_tok_per_session  = avg_rbe * AUDIT_TOK_PER_FILE
@@ -487,6 +500,7 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         'orient_tax_pct':                  orient_tax_pct,
         'orient_spend_eff_tokens':         orient_spend_eff_tokens,
         'orient_spend_cost':               orient_spend_cost,
+        'top_read_files':                  top_read_files,
         # Estimated orientation (legacy model: assumed tokens/file)
         'orient_tokens_per_session': orient_tok_per_session,
         'orient_cost_per_session':   orient_cost_per_session,
@@ -596,6 +610,15 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
         print(f"    Failed tool calls/session:    {data['avg_error_results']:.1f}"
               f"  ({data['sessions_with_errors']}/{total} sessions had failures)")
         print(f"    Same-file re-edits/session:   {data['avg_edit_churn']:.1f}")
+
+    repeated_files = [t for t in data['top_read_files'] if t[1] > 1]
+    if repeated_files:
+        repo_sep = repo_root.rstrip(os.sep) + os.sep
+        print()
+        print(f"  Top repeated files (most-read; candidates for a repo briefing):")
+        for fp, r, n in repeated_files[:5]:
+            disp = fp[len(repo_sep):] if fp.startswith(repo_sep) else fp
+            print(f"    {r:>3}× in {n} session{'s' if n != 1 else ''}   {disp}")
     print()
     print(f"  Est. orientation tokens/session: ~{data['orient_tokens_per_session']:,.0f}")
     print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  "

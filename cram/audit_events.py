@@ -583,6 +583,11 @@ def derive_session(meta: SessionMeta, events: list[Event],
         'pre_edit_input_tokens':   pre_edit_input,
         'pre_edit_cache_reads':    pre_edit_cache_reads,
         'pre_edit_cache_writes':   pre_edit_cache_writes,
+        # Per-file evidence (relevance rules already applied above).
+        # Claude: READ_TOOLS reads with a file_path (Bash reads have none);
+        # Cursor: every path on a relevant event; Codex: empty (no paths).
+        'read_file_counts':        read_counts,
+        'edit_file_counts':        edit_counts,
     }
     # Legacy dicts carry a 'source' key only for non-Claude sessions.
     if meta.source != 'claude':

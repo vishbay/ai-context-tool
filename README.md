@@ -345,6 +345,11 @@ redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20
 tool results — each usually means a retry follows) and same-file re-edits per session
 (a couple is normal; sustained churn means the agent is thrashing).
 
+**Top repeated files** lists the files agents read most, with how many sessions read
+them — cross-session repetition is the concrete evidence for what belongs in a repo
+briefing. (File paths come from Claude/Cursor tool calls; Codex shell reads don't
+carry structured paths and aren't attributed.)
+
 Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
 (default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
 are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,

@@ -408,6 +408,14 @@ def _build_app(root: str):  # noqa: ANN202
                     f'  Same-file re-edits/session {data["avg_edit_churn"]:.1f}'
                 )
 
+            top_files = [t for t in data.get('top_read_files', []) if t[1] > 1][:5]
+            if top_files:
+                lines += ['', '[b]Top repeated files[/b]']
+                for fp, r, n in top_files:
+                    lines.append(
+                        f'  {r}× in {n} session{"s" if n != 1 else ""}  [dim]{fp}[/dim]'
+                    )
+
             projects = data.get('projects') or []
             if projects:
                 lines += ['', '[b]By source[/b]']
