@@ -208,3 +208,79 @@ class TestCursorDbSessions:
         assert len(sessions) == 2
         assert {m.external_id for _, m in sessions} == {'c1', 'c2'}
         store.close()
+
+
+class TestIncrementalCollect:
+    """collect_audit ingestion behavior: parse once, re-parse only on change."""
+
+    def _setup(self, tmp_path, monkeypatch, n=2):
+        import cram.audit as audit_mod
+        td = tmp_path / 'proj'
+        td.mkdir()
+        paths = []
+        for i in range(n):
+            p = str(td / f's{i}.jsonl')
+            with open(p, 'w') as f:
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Read',
+                                    'input': {'file_path': f'{i}.py'}}) + '\n')
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Edit',
+                                    'input': {'file_path': f'{i}.py'}}) + '\n')
+            paths.append(p)
+        monkeypatch.setattr(audit_mod, '_project_transcript_dir',
+                            lambda r, d=str(td): d)
+        monkeypatch.setattr(audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(audit_mod, '_cursor_storage_root', lambda: None)
+        monkeypatch.setattr(audit_mod, '_codex_sessions_dir', lambda: None)
+
+        calls = []
+        real = audit_events.parse_claude
+        monkeypatch.setattr(audit_events, 'parse_claude',
+                            lambda p: (calls.append(p), real(p))[1])
+        return audit_mod, paths, calls
+
+    def test_warm_run_parses_nothing(self, tmp_path, monkeypatch):
+        audit_mod, paths, calls = self._setup(tmp_path, monkeypatch)
+        d1 = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert sorted(calls) == sorted(paths)
+        calls.clear()
+        d2 = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert calls == []
+        assert d1 == d2
+
+    def test_changed_file_reparsed_alone(self, tmp_path, monkeypatch):
+        audit_mod, paths, calls = self._setup(tmp_path, monkeypatch)
+        audit_mod.collect_audit(str(tmp_path), days=365)
+        calls.clear()
+        with open(paths[0], 'a') as f:
+            f.write(json.dumps({'type': 'tool_use', 'name': 'Read',
+                                'input': {'file_path': 'extra.py'}}) + '\n')
+        os.utime(paths[0], (os.path.getmtime(paths[0]) + 10,) * 2)
+        data = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert calls == [paths[0]]
+        assert data['sessions'] == 2
+        # the appended read is reflected: 2 reads in s0 + 1 in s1 → avg 1.5
+        assert abs(data['avg_reads'] - 1.5) < 0.01
+
+    def test_reingest_flag_reparses_all(self, tmp_path, monkeypatch):
+        audit_mod, paths, calls = self._setup(tmp_path, monkeypatch)
+        audit_mod.collect_audit(str(tmp_path), days=365)
+        calls.clear()
+        audit_mod.collect_audit(str(tmp_path), days=365, reingest=True)
+        assert sorted(calls) == sorted(paths)
+
+    def test_corrupt_cache_recovers_at_collect_level(self, tmp_path, monkeypatch):
+        audit_mod, paths, calls = self._setup(tmp_path, monkeypatch)
+        d1 = audit_mod.collect_audit(str(tmp_path), days=365)
+        db_path = os.environ['CRAM_AUDIT_DB']
+        with open(db_path, 'w') as f:
+            f.write('garbage that is definitely not sqlite ' * 100)
+        d2 = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert d1 == d2
+
+    def test_deleted_transcript_drops_out(self, tmp_path, monkeypatch):
+        # Stale ledger/session rows for files no longer on disk must be inert:
+        # queries are anchored to the live glob, not the ledger.
+        audit_mod, paths, calls = self._setup(tmp_path, monkeypatch)
+        assert audit_mod.collect_audit(str(tmp_path), days=365)['sessions'] == 2
+        os.remove(paths[0])
+        assert audit_mod.collect_audit(str(tmp_path), days=365)['sessions'] == 1

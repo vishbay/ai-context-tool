@@ -11,6 +11,7 @@ reference copy only once the refactor has baked.
 from __future__ import annotations
 import datetime
 import json
+import math
 import sqlite3
 
 import cram.audit as current
@@ -19,6 +20,23 @@ from tests.test_audit import (
     _make_transcript, _write_cursor_jsonl, _write_codex_jsonl,
     _exec_cmd, _apply_patch, _token_count,
 )
+
+
+def _deep_equal(a, b, path='$'):
+    """Recursive equality with float tolerance (guards summation-order drift)."""
+    if isinstance(a, float) or isinstance(b, float):
+        assert a is not None and b is not None, (path, a, b)
+        assert math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12), (path, a, b)
+    elif isinstance(a, dict):
+        assert isinstance(b, dict) and set(a) == set(b), (path, a, b)
+        for k in a:
+            _deep_equal(a[k], b[k], f'{path}.{k}')
+    elif isinstance(a, (list, tuple)):
+        assert isinstance(b, (list, tuple)) and len(a) == len(b), (path, a, b)
+        for i, (x, y) in enumerate(zip(a, b)):
+            _deep_equal(x, y, f'{path}[{i}]')
+    else:
+        assert a == b, (path, a, b)
 
 
 def _write_raw(path, messages):
@@ -360,3 +378,132 @@ class TestCodexParity:
         missing = str(tmp_path / 'nope.jsonl')
         assert legacy._analyze_codex_transcript(missing, repo) is None
         assert current._analyze_codex_transcript(missing, repo) is None
+
+
+class TestCollectParity:
+    """collect_audit / run_compare: store-backed pipeline vs frozen legacy,
+    cold cache and warm cache."""
+
+    def _build_tree(self, tmp_path, monkeypatch, with_vscdb=False):
+        repo = str(tmp_path / 'repo')
+        other = str(tmp_path / 'other')
+
+        claude_dir = tmp_path / 'claude-proj'
+        claude_dir.mkdir()
+        _write_raw(str(claude_dir / 's1.jsonl'), [
+            {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'a.py'}},
+            {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'a.py'}},
+            _usage(cache_read=10_000, cache_write=500),
+            {'type': 'tool_result', 'content': 'x' * 30_000},
+            _usage(cache_read=20_000, input_tokens=50, output_tokens=5),
+            {'type': 'tool_result', 'content': 'boom', 'is_error': True},
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'a.py'}},
+            _usage(cache_read=25_000),
+        ])
+        _write_raw(str(claude_dir / 's2.jsonl'), [
+            {'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'grep -rn x .'}},
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'b.py'}},
+            {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': 'b.py'}},
+        ])
+
+        at_dir = None
+        if not with_vscdb:
+            at_dir = tmp_path / 'agent-transcripts'
+            at_dir.mkdir()
+            _write_cursor_jsonl(str(at_dir / 'c.jsonl'), repo, [
+                ('read_file', [repo + '/a.py']),
+                ('read_file', [repo + '/a.py']),
+                ('edit_file', [repo + '/a.py']),
+            ])
+            _write_cursor_jsonl(str(at_dir / 'irrelevant.jsonl'), other, [
+                ('read_file', [other + '/z.py']),
+            ])
+
+        storage_root = None
+        if with_vscdb:
+            storage_root = tmp_path / 'cursor-user'
+            ws = storage_root / 'workspaceStorage' / 'h1'
+            ws.mkdir(parents=True)
+            _make_cursor_db(str(ws / 'state.vscdb'), [
+                {'_composerId': 'c1', '_bubbleId': 'b1',
+                 'createdAt': 1_900_000_000_000,
+                 'toolFormerData': [
+                     {'toolName': 'read_file', 'params': {'target_file': repo + '/a.py'}},
+                     {'toolName': 'edit_file', 'params': {'target_file': repo + '/a.py'}},
+                 ]},
+            ])
+
+        codex_root = tmp_path / 'codex-sessions'
+        (codex_root / 'sub').mkdir(parents=True)
+        _write_codex_jsonl(str(codex_root / 'sub' / 'x.jsonl'), repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _token_count(500, cached_input_tokens=100, output_tokens=20),
+            _apply_patch(f'*** Update File: {repo}/a.py\n--- a\n+++ b\n'),
+            _token_count(2_000),
+        ])
+
+        cd = str(claude_dir)
+        at = str(at_dir) if at_dir else None
+        sr = str(storage_root) if storage_root else None
+        cx = str(codex_root)
+        for mod in (legacy, current):
+            monkeypatch.setattr(mod, '_project_transcript_dir', lambda r, d=cd: d)
+            monkeypatch.setattr(mod, '_cursor_agent_transcripts_dir', lambda d=at: d)
+            monkeypatch.setattr(mod, '_cursor_storage_root', lambda d=sr: d)
+            monkeypatch.setattr(mod, '_codex_sessions_dir', lambda d=cx: d)
+        return repo
+
+    def test_cold_warm_and_reingest_equal_legacy(self, tmp_path, monkeypatch):
+        repo = self._build_tree(tmp_path, monkeypatch)
+        old = legacy.collect_audit(repo, days=365)
+        assert old is not None and old['sessions'] == 4
+        cold = current.collect_audit(repo, days=365)
+        warm = current.collect_audit(repo, days=365)
+        forced = current.collect_audit(repo, days=365, reingest=True)
+        _deep_equal(old, cold)
+        _deep_equal(old, warm)
+        _deep_equal(old, forced)
+
+    def test_vscdb_branch_parity(self, tmp_path, monkeypatch):
+        repo = self._build_tree(tmp_path, monkeypatch, with_vscdb=True)
+        old = legacy.collect_audit(repo, days=365)
+        cold = current.collect_audit(repo, days=365)
+        warm = current.collect_audit(repo, days=365)
+        _deep_equal(old, cold)
+        _deep_equal(old, warm)
+        assert any(p[0] == 'cursor' for p in cold['projects'])
+
+    def test_none_when_no_transcripts(self, tmp_path, monkeypatch):
+        for mod in (legacy, current):
+            monkeypatch.setattr(mod, '_project_transcript_dir', lambda r: None)
+            monkeypatch.setattr(mod, '_cursor_agent_transcripts_dir', lambda: None)
+            monkeypatch.setattr(mod, '_cursor_storage_root', lambda: None)
+            monkeypatch.setattr(mod, '_codex_sessions_dir', lambda: None)
+        assert legacy.collect_audit(str(tmp_path)) is None
+        assert current.collect_audit(str(tmp_path)) is None
+
+    def test_run_compare_json_parity(self, tmp_path, monkeypatch, capsys):
+        td_a = tmp_path / 't-a'
+        td_b = tmp_path / 't-b'
+        td_a.mkdir()
+        td_b.mkdir()
+        _write_raw(str(td_a / 's.jsonl'),
+                   [{'type': 'tool_use', 'name': 'Read', 'input': {}}] * 4
+                   + [{'type': 'tool_use', 'name': 'Edit', 'input': {}}])
+        _write_raw(str(td_b / 's.jsonl'),
+                   [{'type': 'tool_use', 'name': 'Read', 'input': {}},
+                    {'type': 'tool_use', 'name': 'Edit', 'input': {}}])
+        repo_a, repo_b = str(tmp_path / 'repo-a'), str(tmp_path / 'repo-b')
+        mapping = {repo_a: str(td_a), repo_b: str(td_b)}
+        for mod in (legacy, current):
+            monkeypatch.setattr(mod, '_project_transcript_dir',
+                                lambda root, m=mapping: m.get(root))
+            monkeypatch.setattr(mod, '_cursor_agent_transcripts_dir', lambda: None)
+            monkeypatch.setattr(mod, '_cursor_storage_root', lambda: None)
+            monkeypatch.setattr(mod, '_codex_sessions_dir', lambda: None)
+
+        legacy.run_compare(repo_a, repo_b, days=365, as_json=True)
+        old = json.loads(capsys.readouterr().out)
+        current.run_compare(repo_a, repo_b, days=365, as_json=True)
+        new = json.loads(capsys.readouterr().out)
+        _deep_equal(old, new)

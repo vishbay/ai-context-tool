@@ -15,7 +15,7 @@ Commands:
   decide      "<decision>" [path]          Append an architectural decision to DECISIONS.md
   decisions   [--mine] [--days N] [path]   Show decisions; --mine extracts drafts from git log
   gotcha      "<trap>" [path]              Append a non-obvious trap to GOTCHAS.md
-  audit       [--days N] [--all] [--json] [--compare A B]  Measure orientation tax; --compare for A/B checkouts
+  audit       [--days N] [--all] [--json] [--compare A B] [--reingest]  Measure orientation tax; --compare for A/B checkouts
   benchmark   [path]                       Show token savings vs full-repo auto-indexing
   status      [path]                       Show .ai-context/ freshness
   doctor      [path]                       Check setup: models, hooks, git, context files

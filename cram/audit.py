@@ -13,6 +13,7 @@ import glob
 import datetime
 
 from cram import audit_events
+from cram import audit_store
 # Back-compat re-exports: these names lived here before the event-store split
 # and are imported by tests and external callers.
 from cram.audit_events import (  # noqa: F401
@@ -127,8 +128,9 @@ def _analyze_cursor_workspace_db(db_path: str, repo_root: str,
     return sessions
 
 
-def _collect_cursor_sessions(repo_root: str, cutoff: datetime.datetime) -> list[dict]:
-    """Return Cursor session dicts for repo_root since cutoff.
+def _collect_cursor_sessions(store, repo_root: str, cutoff: datetime.datetime,
+                             reingest: bool = False) -> list[dict]:
+    """Return Cursor session dicts for repo_root since cutoff, via the store.
 
     Tries agent-transcripts (JSONL) first, then workspace SQLite databases.
     """
@@ -140,9 +142,12 @@ def _collect_cursor_sessions(repo_root: str, cutoff: datetime.datetime) -> list[
         for path in glob.glob(os.path.join(at_dir, '*.jsonl')):
             if datetime.datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
                 continue
-            r = _analyze_cursor_transcript(path, repo_root)
-            if r:
-                sessions.append(r)
+            for meta, events in _sessions_from_file(
+                    store, path, 'cursor-jsonl',
+                    audit_events.parse_cursor_jsonl, reingest):
+                r = _derive(meta, events, repo_root)
+                if r:
+                    sessions.append(r)
         # If we found any sessions via agent-transcripts, skip SQLite.
         if sessions:
             return sessions
@@ -155,7 +160,13 @@ def _collect_cursor_sessions(repo_root: str, cutoff: datetime.datetime) -> list[
     for db_path in glob.glob(os.path.join(ws_root, '*', 'state.vscdb')):
         if datetime.datetime.fromtimestamp(os.path.getmtime(db_path)) < cutoff:
             continue
-        sessions.extend(_analyze_cursor_workspace_db(db_path, repo_root, cutoff))
+        for meta, events in _cursor_db_sessions(store, db_path, reingest):
+            # Per-composer cutoff on bubble timestamps, as in the legacy parser.
+            if meta.event_mtime and datetime.datetime.fromtimestamp(meta.event_mtime) < cutoff:
+                continue
+            r = _derive(meta, events, repo_root)
+            if r:
+                sessions.append(r)
 
     return sessions
 
@@ -186,8 +197,9 @@ def _analyze_codex_transcript(path: str, repo_root: str) -> dict | None:
         return None
 
 
-def _collect_codex_sessions(repo_root: str, cutoff: datetime.datetime) -> list[dict]:
-    """Return Codex session dicts for repo_root since cutoff."""
+def _collect_codex_sessions(store, repo_root: str, cutoff: datetime.datetime,
+                            reingest: bool = False) -> list[dict]:
+    """Return Codex session dicts for repo_root since cutoff, via the store."""
     sd = _codex_sessions_dir()
     if not sd:
         return []
@@ -195,9 +207,11 @@ def _collect_codex_sessions(repo_root: str, cutoff: datetime.datetime) -> list[d
     for path in glob.glob(os.path.join(sd, '**', '*.jsonl'), recursive=True):
         if datetime.datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
             continue
-        r = _analyze_codex_transcript(path, repo_root)
-        if r:
-            sessions.append(r)
+        for meta, events in _sessions_from_file(
+                store, path, 'codex', audit_events.parse_codex, reingest):
+            r = _derive(meta, events, repo_root)
+            if r:
+                sessions.append(r)
     return sessions
 
 
@@ -223,12 +237,78 @@ def ratio_band(ratio: float) -> str:
     return 'high'
 
 
-def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) -> dict | None:
+# ── Cached ingestion (event store) ────────────────────────────────────────────
+
+def _sessions_from_file(store, path: str, adapter: str, parse_fn,
+                        reingest: bool) -> list:
+    """Return [(meta, events)] for a one-session-per-file transcript, cached.
+
+    A failed parse yields nothing for this run (matching the cacheless
+    behavior) but is recorded so the file is retried on the next run.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    if reingest or store.needs_ingest(path, st.st_mtime, st.st_size):
+        parsed = parse_fn(path)
+        if parsed is None:
+            store.mark_failed(path, adapter, st.st_mtime, st.st_size)
+            return []
+        store.replace_file(path, adapter, st.st_mtime, st.st_size, [parsed])
+        return [parsed]
+    return [(meta, store.events_for_session(sid))
+            for sid, meta in store.sessions_for_file(path)]
+
+
+def _cursor_db_sessions(store, db_path: str, reingest: bool) -> list:
+    """Return [(meta, events)] per composer session in a state.vscdb, cached.
+
+    parse_cursor_db can't distinguish a locked/unreadable db from a genuinely
+    empty one, so an empty result is treated as a failed parse: nothing this
+    run (legacy behavior either way) and a retry next run.
+    """
+    try:
+        st = os.stat(db_path)
+    except OSError:
+        return []
+    if reingest or store.needs_ingest(db_path, st.st_mtime, st.st_size):
+        parsed = audit_events.parse_cursor_db(db_path)
+        if not parsed:
+            store.mark_failed(db_path, 'cursor-db', st.st_mtime, st.st_size)
+            return []
+        store.replace_file(db_path, 'cursor-db', st.st_mtime, st.st_size, parsed)
+        return parsed
+    return [(meta, store.events_for_session(sid))
+            for sid, meta in store.sessions_for_file(db_path)]
+
+
+def _derive(meta, events, repo_root: str | None = None) -> dict | None:
+    try:
+        return audit_events.derive_session(meta, events, repo_root,
+                                           big_result_bytes=BIG_RESULT_BYTES)
+    except Exception:
+        return None
+
+
+def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False,
+                  *, reingest: bool = False) -> dict | None:
     """Analyse transcripts and return structured audit data, or None if none found.
 
     This is the data core shared by the CLI report, `cram audit --json`, and the
     TUI's Audit tab. Includes Cursor sessions when available (single-repo mode only).
+    Transcripts are ingested into the local event store on first sight and
+    re-parsed only when they change; reingest=True bypasses the cache.
     """
+    store = audit_store.AuditStore.open()
+    try:
+        return _collect_audit_inner(store, repo_root, days, all_projects, reingest)
+    finally:
+        store.close()
+
+
+def _collect_audit_inner(store, repo_root: str, days: int,
+                         all_projects: bool, reingest: bool) -> dict | None:
     if all_projects:
         projects_root = os.path.join(os.path.expanduser('~'), '.claude', 'projects')
         dirs = sorted(glob.glob(projects_root + '/*/'))
@@ -253,10 +333,12 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
             mtime = os.path.getmtime(f)
             if datetime.datetime.fromtimestamp(mtime) < cutoff:
                 continue
-            r = _analyze_transcript(f)
-            if r:
-                sessions.append(r)
-                all_sessions.append(r)
+            for meta, events in _sessions_from_file(
+                    store, f, 'claude', audit_events.parse_claude, reingest):
+                r = _derive(meta, events)
+                if r:
+                    sessions.append(r)
+                    all_sessions.append(r)
 
         if not sessions:
             continue
@@ -269,7 +351,7 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
     # Append Cursor sessions for single-repo mode.
     # --all skips Cursor/Codex (no per-project grouping available yet).
     if not all_projects:
-        cursor_sessions = _collect_cursor_sessions(repo_root, cutoff)
+        cursor_sessions = _collect_cursor_sessions(store, repo_root, cutoff, reingest)
         if cursor_sessions:
             all_sessions.extend(cursor_sessions)
             avg_reads = sum(s['reads'] for s in cursor_sessions) / len(cursor_sessions)
@@ -278,7 +360,7 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
                 ('cursor', len(cursor_sessions), avg_reads, avg_rbe, 0.0)
             )
 
-        codex_sessions = _collect_codex_sessions(repo_root, cutoff)
+        codex_sessions = _collect_codex_sessions(store, repo_root, cutoff, reingest)
         if codex_sessions:
             all_sessions.extend(codex_sessions)
             avg_reads = sum(s['reads'] for s in codex_sessions) / len(codex_sessions)
@@ -387,10 +469,11 @@ def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False) ->
 
 
 def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
-              as_json: bool = False) -> None:
+              as_json: bool = False, reingest: bool = False) -> None:
     """Print an orientation-tax audit for the repo (or all projects)."""
 
-    data = collect_audit(repo_root, days=days, all_projects=all_projects)
+    data = collect_audit(repo_root, days=days, all_projects=all_projects,
+                         reingest=reingest)
 
     if data is None:
         if not all_projects and _project_transcript_dir(repo_root) is None:
@@ -515,15 +598,15 @@ _COMPARE_ROWS = [
 
 
 def run_compare(path_a: str, path_b: str, days: int = 30,
-                as_json: bool = False) -> None:
+                as_json: bool = False, reingest: bool = False) -> None:
     """Side-by-side audit of two checkouts — the P0 attribution experiment view.
 
     A is the treatment arm (context wiring on), B the control, by convention;
     the output is symmetric so the order only affects the delta sign.
     """
     root_a, root_b = _resolve_root(path_a), _resolve_root(path_b)
-    data_a = collect_audit(root_a, days=days)
-    data_b = collect_audit(root_b, days=days)
+    data_a = collect_audit(root_a, days=days, reingest=reingest)
+    data_b = collect_audit(root_b, days=days, reingest=reingest)
 
     if as_json:
         print(json.dumps({
@@ -576,17 +659,21 @@ def main() -> None:
                         default=None,
                         help='Compare two checkouts side by side '
                              '(P0 attribution experiment)')
+    parser.add_argument('--reingest', '--no-cache', action='store_true',
+                        dest='reingest',
+                        help='Ignore the audit cache and re-parse all transcripts')
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
 
     if args.compare:
         run_compare(args.compare[0], args.compare[1],
-                    days=args.days, as_json=args.as_json)
+                    days=args.days, as_json=args.as_json, reingest=args.reingest)
         return
 
     root = _resolve_root(args.path) if args.path else _resolve_root(os.getcwd())
 
-    run_audit(root, days=args.days, all_projects=args.all_projects, as_json=args.as_json)
+    run_audit(root, days=args.days, all_projects=args.all_projects,
+              as_json=args.as_json, reingest=args.reingest)
 
 
 if __name__ == '__main__':
