@@ -45,8 +45,9 @@ AUDIT_BASE_PRICE: float = float(os.environ.get(
 # carried (re-read) by every subsequent request in the session.
 # Override with: CRAM_AUDIT_BIG_RESULT_BYTES=20000
 BIG_RESULT_BYTES: int = int(os.environ.get('CRAM_AUDIT_BIG_RESULT_BYTES', '20000'))
-# Cache-read multiplier vs base input price (0.1x on Anthropic).
+# Cache multipliers vs base input price (0.1x read / 1.25x write on Anthropic).
 CACHE_READ_MULT: float = _PRICING['cache_read_mult']
+CACHE_WRITE_MULT: float = _PRICING['cache_write_mult']
 
 
 def _analyze_transcript(path: str) -> dict | None:
@@ -413,6 +414,27 @@ def _collect_audit_inner(store, repo_root: str, days: int,
     avg_edit_churn      = sum(s['edit_churn'] for s in all_sessions) / total
     sessions_with_errors = sum(1 for s in all_sessions if s['error_results'] > 0)
 
+    # Measured orientation: input-side spend before the first edit, as a share
+    # of total input-side spend. Edit sessions only (read-only sessions are
+    # excluded — reading was the job) and only sessions with token usage.
+    # Effective tokens weight cache traffic by the provider multipliers, applied
+    # here at query time so CRAM_PROVIDER changes never require a re-parse.
+    edit_session_list  = [s for s in all_sessions if s['edits'] > 0]
+    read_only_sessions = total - len(edit_session_list)
+    measured           = [s for s in edit_session_list if s['requests'] > 0]
+
+    def _eff(inp: float, cw: float, cr: float) -> float:
+        return inp + cw * CACHE_WRITE_MULT + cr * CACHE_READ_MULT
+
+    eff_pre = sum(_eff(s['pre_edit_input_tokens'], s['pre_edit_cache_writes'],
+                       s['pre_edit_cache_reads']) for s in measured)
+    eff_tot = sum(_eff(s['input_tokens'], s['cache_writes'], s['cache_reads'])
+                  for s in measured)
+    orient_tax_pct          = eff_pre / eff_tot if measured and eff_tot else None
+    orient_spend_eff_tokens = eff_pre / len(measured) if measured else None
+    orient_spend_cost       = (orient_spend_eff_tokens * AUDIT_BASE_PRICE
+                               if orient_spend_eff_tokens is not None else None)
+
     # Orientation cost estimate: reads_before_edit × avg file size × Sonnet price
     # Assumptions: AUDIT_TOK_PER_FILE tokens per file read, AUDIT_BASE_PRICE per token.
     orient_tok_per_session  = avg_rbe * AUDIT_TOK_PER_FILE
@@ -457,6 +479,15 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         'avg_edit_churn':            avg_edit_churn,
         'sessions_with_errors':      sessions_with_errors,
         'big_result_bytes':          BIG_RESULT_BYTES,
+        # Measured orientation (new, additive; None when unmeasurable)
+        'edit_sessions':                   len(edit_session_list),
+        'read_only_sessions':              read_only_sessions,
+        'orient_measured_sessions':        len(measured),
+        'orient_unmeasured_edit_sessions': len(edit_session_list) - len(measured),
+        'orient_tax_pct':                  orient_tax_pct,
+        'orient_spend_eff_tokens':         orient_spend_eff_tokens,
+        'orient_spend_cost':               orient_spend_cost,
+        # Estimated orientation (legacy model: assumed tokens/file)
         'orient_tokens_per_session': orient_tok_per_session,
         'orient_cost_per_session':   orient_cost_per_session,
         'sessions_per_month':        sessions_per_month,
@@ -507,6 +538,26 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
     if data['cache_blind_sessions']:
         print(f"    ⚠ {data['cache_blind_sessions']} session(s) wrote cache but never read it — "
               f"check that prompt caching is engaging")
+
+    print()
+    print(f"  Orientation (measured):")
+    excl = (f"  ({data['read_only_sessions']} read-only excluded — reading was the job)"
+            if data['read_only_sessions'] else '')
+    print(f"    Edit sessions:                {data['edit_sessions']}/{total}{excl}")
+    if data['orient_measured_sessions']:
+        if data['orient_unmeasured_edit_sessions']:
+            print(f"    With token usage:             {data['orient_measured_sessions']}"
+                  f"/{data['edit_sessions']} measured"
+                  f"  ({data['orient_unmeasured_edit_sessions']} lack usage data)")
+        if data['orient_tax_pct'] is not None:
+            print(f"    Orientation share of spend:   {data['orient_tax_pct']:.0%}"
+                  f"  of input-side spend lands before the first edit")
+        if data['orient_spend_eff_tokens'] is not None:
+            print(f"    Orientation spend/session:    ~{data['orient_spend_eff_tokens']:,.0f} eff. tokens"
+                  f"  (~${data['orient_spend_cost']:.4f}, {data['provider']} pricing)")
+    elif data['edit_sessions']:
+        print(f"    No token usage in these sessions — measured orientation "
+              f"unavailable (estimates below)")
 
     if data['avg_requests']:
         print()
@@ -565,8 +616,8 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
             print(f"  {short:<45} {n:>8} {reads:>8.1f} {rbe:>6.1f} {cw:>12,.0f}")
 
     print()
-    print("  To reduce orientation tax: cram task \"your task\" before each session")
-    print("  Then compare: run this command again next week.")
+    print("  High orientation share? Give the agent a repo briefing (e.g. cram task)")
+    print("  and re-audit to verify the share actually drops.")
 
 
 def _resolve_root(path: str) -> str:
@@ -581,6 +632,7 @@ def _resolve_root(path: str) -> str:
 # Rows for the side-by-side comparison: (label, summary key, format).
 _COMPARE_ROWS = [
     ('Sessions analysed',          'sessions',                '{:.0f}'),
+    ('Orientation tax % (meas.)',  'orient_tax_pct',          '{:.1%}'),
     ('Reads before first edit ←',  'avg_reads_before_edit',   '{:.1f}'),
     ('Read-to-edit ratio',         'avg_ratio',               '{:.1f}'),
     ('Edits/session',              'avg_edits',               '{:.1f}'),

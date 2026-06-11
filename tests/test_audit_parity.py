@@ -1,11 +1,15 @@
-"""Parity tests: refactored audit pipeline vs the frozen legacy implementation.
+"""Parity tests: current audit pipeline vs the frozen legacy implementation.
 
 tests/legacy_audit_reference.py is a verbatim copy of cram/audit.py as it was
-before the event-store refactor. Every analyzer entry point must return
-*exactly* the same dict (same keys, same values, including None semantics and
-the claude-has-no-'source'-key asymmetry) on identical transcripts. These tests
-pin the P0 experiment's metric semantics through the refactor; delete the
-reference copy only once the refactor has baked.
+before the event-store refactor.
+
+Policy: **legacy metrics are frozen, new metrics are additive.** Every key the
+legacy implementation returns must be present in the current output with an
+exactly-equal value (including None semantics and the
+claude-has-no-'source'-key asymmetry); keys that only exist in the current
+output are new, deliberately-added metrics and are tested in their own suites
+(e.g. tests/test_audit_measured.py). Delete the reference copy only once the
+pre-pivot numbers no longer need pinning.
 """
 
 from __future__ import annotations
@@ -23,12 +27,14 @@ from tests.test_audit import (
 
 
 def _deep_equal(a, b, path='$'):
-    """Recursive equality with float tolerance (guards summation-order drift)."""
+    """Frozen-keys equality: every key/value of `a` (legacy) must appear in `b`
+    with an equal value; extra keys in `b` are allowed (additive metrics).
+    Floats compare with tolerance (guards summation-order drift)."""
     if isinstance(a, float) or isinstance(b, float):
         assert a is not None and b is not None, (path, a, b)
         assert math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12), (path, a, b)
     elif isinstance(a, dict):
-        assert isinstance(b, dict) and set(a) == set(b), (path, a, b)
+        assert isinstance(b, dict) and set(a) <= set(b), (path, a, b)
         for k in a:
             _deep_equal(a[k], b[k], f'{path}.{k}')
     elif isinstance(a, (list, tuple)):
@@ -37,6 +43,20 @@ def _deep_equal(a, b, path='$'):
             _deep_equal(x, y, f'{path}[{i}]')
     else:
         assert a == b, (path, a, b)
+
+
+def _assert_frozen(old, new):
+    """Session-dict parity under the frozen-keys policy. Handles None and lists."""
+    if old is None or new is None:
+        assert old is None and new is None, (old, new)
+        return new
+    if isinstance(old, list):
+        assert isinstance(new, list) and len(old) == len(new), (old, new)
+        for o, n in zip(old, new):
+            _assert_frozen(o, n)
+        return new
+    _deep_equal(old, new)
+    return new
 
 
 def _write_raw(path, messages):
@@ -55,9 +75,8 @@ def _usage(cache_read=0, input_tokens=0, cache_write=0, output_tokens=0):
 def _assert_parity_claude(path):
     old = legacy._analyze_transcript(path)
     new = current._analyze_transcript(path)
-    assert old == new
+    _assert_frozen(old, new)
     if old is not None:
-        assert set(old.keys()) == set(new.keys())
         assert 'source' not in new  # claude dicts must not grow a source key
     return new
 
@@ -181,7 +200,7 @@ class TestCursorJsonlParity:
                                 'files': [repo + '/a.py']}) + '\n')
         old = legacy._analyze_cursor_transcript(path, repo)
         new = current._analyze_cursor_transcript(path, repo)
-        assert old == new
+        _assert_frozen(old, new)
         assert new['source'] == 'cursor'
 
     def test_multifile_redundant_reads(self, tmp_path):
@@ -194,7 +213,7 @@ class TestCursorJsonlParity:
         ])
         old = legacy._analyze_cursor_transcript(path, repo)
         new = current._analyze_cursor_transcript(path, repo)
-        assert old == new
+        _assert_frozen(old, new)
 
     def test_no_relevant_activity_returns_none(self, tmp_path):
         repo, other = '/repo/mine', '/repo/other'
@@ -231,8 +250,7 @@ class TestCursorDbParity:
     def _compare(self, db, repo):
         old = legacy._analyze_cursor_workspace_db(db, repo, self.CUTOFF)
         new = current._analyze_cursor_workspace_db(db, repo, self.CUTOFF)
-        assert old == new
-        return new
+        return _assert_frozen(old, new)
 
     def test_reads_edits_two_composers(self, tmp_path):
         repo = '/repo/p'
@@ -317,8 +335,7 @@ class TestCodexParity:
     def _compare(self, path, repo):
         old = legacy._analyze_codex_transcript(path, repo)
         new = current._analyze_codex_transcript(path, repo)
-        assert old == new
-        return new
+        return _assert_frozen(old, new)
 
     def test_full_session(self, tmp_path):
         repo = str(tmp_path / 'repo')

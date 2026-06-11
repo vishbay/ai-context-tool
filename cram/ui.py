@@ -309,6 +309,17 @@ def _build_app(root: str):  # noqa: ANN202
                 '',
                 '[b]Cache engagement[/b]',
             ]
+            if data.get('orient_tax_pct') is not None:
+                lines.insert(
+                    4,
+                    f'  Orientation share of spend {data["orient_tax_pct"]:.0%}'
+                    f'   [dim]measured · {data.get("orient_measured_sessions", 0)} '
+                    f'edit session(s)[/dim]')
+            if data.get('read_only_sessions'):
+                lines.insert(
+                    4,
+                    f'  Read-only sessions         {data["read_only_sessions"]}'
+                    f'   [dim]excluded from orientation metrics[/dim]')
             engaged = data['cache_engaged_sessions']
             blind   = data['cache_blind_sessions']
             total   = data['sessions']

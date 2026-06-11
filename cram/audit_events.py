@@ -451,6 +451,7 @@ def derive_session(meta: SessionMeta, events: list[Event],
 
     cache_writes = 0
     cache_reads = 0
+    input_tokens = 0
     ctx_per_req: list[int] = []
     output_per_req: list[int] = []
     big_results = 0
@@ -458,14 +459,27 @@ def derive_session(meta: SessionMeta, events: list[Event],
     error_results = 0
     any_relevant = False  # cursor-db session-level gate
 
+    # Measured orientation: raw token sums for requests before the first
+    # counted edit (the same first_edit_seen boundary reads_before_edit uses).
+    requests_before_edit = 0
+    pre_edit_input = 0
+    pre_edit_cache_reads = 0
+    pre_edit_cache_writes = 0
+
     for ev in events:
         kind = ev.kind
 
         if kind == 'request_usage':
             cache_writes += ev.tok_cache_write
             cache_reads  += ev.tok_cache_read
+            input_tokens += ev.tok_input
             ctx_per_req.append(ev.tok_input + ev.tok_cache_read + ev.tok_cache_write)
             output_per_req.append(ev.tok_output)
+            if not first_edit_seen:
+                requests_before_edit += 1
+                pre_edit_input        += ev.tok_input
+                pre_edit_cache_reads  += ev.tok_cache_read
+                pre_edit_cache_writes += ev.tok_cache_write
             continue
 
         if kind == 'tool_result':
@@ -563,6 +577,12 @@ def derive_session(meta: SessionMeta, events: list[Event],
         'error_results':           error_results,
         'edit_churn':              sum(c - 1 for c in edit_counts.values() if c > 1),
         'mtime':                   meta.mtime,
+        # Measured-orientation inputs (raw; pricing applied at query time)
+        'input_tokens':            input_tokens,
+        'requests_before_edit':    requests_before_edit,
+        'pre_edit_input_tokens':   pre_edit_input,
+        'pre_edit_cache_reads':    pre_edit_cache_reads,
+        'pre_edit_cache_writes':   pre_edit_cache_writes,
     }
     # Legacy dicts carry a 'source' key only for non-Claude sessions.
     if meta.source != 'claude':

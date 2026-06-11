@@ -314,8 +314,22 @@ Avg edits/session:              3.1
 Avg read-to-edit ratio:         2.6×  ~ normal
 Cache engagement:               18/24 sessions read from cache
 
+Orientation (measured):
+  Edit sessions:                16/24  (8 read-only excluded — reading was the job)
+  Orientation share of spend:   31%  of input-side spend lands before the first edit
+  Orientation spend/session:    ~41,200 eff. tokens  (~$0.1236, anthropic pricing)
+
 Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
 ```
+
+Every number is labeled **measured** or **estimated**. The orientation share is
+measured: it is the input-side token spend (input + cache-weighted traffic, provider
+multipliers applied) of all requests before the session's first edit, divided by the
+session's total input-side spend — summed across sessions, so long sessions weigh
+more. It is deliberately conservative: read-only sessions are excluded (reading was
+the job, not waste), sessions without token usage in their transcripts (e.g. Cursor)
+are excluded and counted as unmeasured, and output-token spend is not included. The
+older per-file cost lines remain in the report and stay labeled as estimates.
 
 The cache-engagement line is the silent-failure check: a session that wrote cache but
 never read it back paid the 1.25× write price for nothing — a signal that prompt
