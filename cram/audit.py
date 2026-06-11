@@ -142,11 +142,12 @@ def _collect_cursor_sessions(store, repo_root: str, cutoff: datetime.datetime,
     at_dir = _cursor_agent_transcripts_dir()
     if at_dir:
         for path in glob.glob(os.path.join(at_dir, '*.jsonl')):
-            if datetime.datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
+            st = os.stat(path)
+            if datetime.datetime.fromtimestamp(st.st_mtime) < cutoff:
                 continue
             for meta, events in _sessions_from_file(
                     store, path, 'cursor-jsonl',
-                    audit_events.parse_cursor_jsonl, reingest):
+                    audit_events.parse_cursor_jsonl, reingest, st):
                 r = _derive(meta, events, repo_root)
                 if r:
                     sessions.append(r)
@@ -160,9 +161,10 @@ def _collect_cursor_sessions(store, repo_root: str, cutoff: datetime.datetime,
         return []
     ws_root = os.path.join(storage_root, 'workspaceStorage')
     for db_path in glob.glob(os.path.join(ws_root, '*', 'state.vscdb')):
-        if datetime.datetime.fromtimestamp(os.path.getmtime(db_path)) < cutoff:
+        st = os.stat(db_path)
+        if datetime.datetime.fromtimestamp(st.st_mtime) < cutoff:
             continue
-        for meta, events in _cursor_db_sessions(store, db_path, reingest):
+        for meta, events in _cursor_db_sessions(store, db_path, reingest, st):
             # Per-composer cutoff on bubble timestamps, as in the legacy parser.
             if meta.event_mtime and datetime.datetime.fromtimestamp(meta.event_mtime) < cutoff:
                 continue
@@ -207,10 +209,11 @@ def _collect_codex_sessions(store, repo_root: str, cutoff: datetime.datetime,
         return []
     sessions: list[dict] = []
     for path in glob.glob(os.path.join(sd, '**', '*.jsonl'), recursive=True):
-        if datetime.datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
+        st = os.stat(path)
+        if datetime.datetime.fromtimestamp(st.st_mtime) < cutoff:
             continue
         for meta, events in _sessions_from_file(
-                store, path, 'codex', audit_events.parse_codex, reingest):
+                store, path, 'codex', audit_events.parse_codex, reingest, st):
             r = _derive(meta, events, repo_root)
             if r:
                 sessions.append(r)
@@ -242,16 +245,18 @@ def ratio_band(ratio: float) -> str:
 # ── Cached ingestion (event store) ────────────────────────────────────────────
 
 def _sessions_from_file(store, path: str, adapter: str, parse_fn,
-                        reingest: bool) -> list:
+                        reingest: bool, st: os.stat_result | None = None) -> list:
     """Return [(meta, events)] for a one-session-per-file transcript, cached.
 
     A failed parse yields nothing for this run (matching the cacheless
     behavior) but is recorded so the file is retried on the next run.
+    Callers that already stat'ed the file pass `st` to avoid a second syscall.
     """
-    try:
-        st = os.stat(path)
-    except OSError:
-        return []
+    if st is None:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return []
     if reingest or store.needs_ingest(path, st.st_mtime, st.st_size):
         parsed = parse_fn(path)
         if parsed is None:
@@ -263,17 +268,19 @@ def _sessions_from_file(store, path: str, adapter: str, parse_fn,
             for sid, meta in store.sessions_for_file(path)]
 
 
-def _cursor_db_sessions(store, db_path: str, reingest: bool) -> list:
+def _cursor_db_sessions(store, db_path: str, reingest: bool,
+                        st: os.stat_result | None = None) -> list:
     """Return [(meta, events)] per composer session in a state.vscdb, cached.
 
     parse_cursor_db can't distinguish a locked/unreadable db from a genuinely
     empty one, so an empty result is treated as a failed parse: nothing this
     run (legacy behavior either way) and a retry next run.
     """
-    try:
-        st = os.stat(db_path)
-    except OSError:
-        return []
+    if st is None:
+        try:
+            st = os.stat(db_path)
+        except OSError:
+            return []
     if reingest or store.needs_ingest(db_path, st.st_mtime, st.st_size):
         parsed = audit_events.parse_cursor_db(db_path)
         if not parsed:
@@ -291,6 +298,15 @@ def _derive(meta, events, repo_root: str | None = None) -> dict | None:
                                            big_result_bytes=BIG_RESULT_BYTES)
     except Exception:
         return None
+
+
+def _analyze_transcript_cached(store, path: str) -> dict | None:
+    """Cache-backed equivalent of _analyze_transcript (for the TUI)."""
+    out = None
+    for meta, events in _sessions_from_file(
+            store, path, 'claude', audit_events.parse_claude, False):
+        out = _derive(meta, events)
+    return out
 
 
 def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False,
@@ -332,11 +348,11 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         files = glob.glob(proj_dir + '*.jsonl')
         sessions = []
         for f in files:
-            mtime = os.path.getmtime(f)
-            if datetime.datetime.fromtimestamp(mtime) < cutoff:
+            st = os.stat(f)
+            if datetime.datetime.fromtimestamp(st.st_mtime) < cutoff:
                 continue
             for meta, events in _sessions_from_file(
-                    store, f, 'claude', audit_events.parse_claude, reingest):
+                    store, f, 'claude', audit_events.parse_claude, reingest, st):
                 r = _derive(meta, events)
                 if r:
                     sessions.append(r)
@@ -623,11 +639,10 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
 
     repeated_files = [t for t in data['top_read_files'] if t[1] > 1]
     if repeated_files:
-        repo_sep = repo_root.rstrip(os.sep) + os.sep
         print()
         print(f"  Top repeated files (most-read; candidates for a repo briefing):")
         for fp, r, n in repeated_files[:5]:
-            disp = fp[len(repo_sep):] if fp.startswith(repo_sep) else fp
+            disp = audit_events.repo_rel(fp, repo_root)
             print(f"    {r:>3}× in {n} session{'s' if n != 1 else ''}   {disp}")
 
     if data['findings']:

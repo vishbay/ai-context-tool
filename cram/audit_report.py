@@ -11,10 +11,7 @@ from __future__ import annotations
 import datetime
 import os
 
-
-def _repo_rel(path: str, repo_root: str) -> str:
-    repo_sep = repo_root.rstrip(os.sep) + os.sep
-    return path[len(repo_sep):] if path.startswith(repo_sep) else path
+from cram.audit_events import repo_rel
 
 
 def render_report(data: dict, repo_root: str) -> str:
@@ -81,7 +78,9 @@ def render_report(data: dict, repo_root: str) -> str:
         lines.append('| Reads | Sessions | File |')
         lines.append('|------:|---------:|------|')
         for fp, r, n in repeated[:10]:
-            lines.append(f'| {r} | {n} | `{_repo_rel(fp, repo_root)}` |')
+            # Escape pipes so a path can't break the markdown table row.
+            cell = repo_rel(fp, repo_root).replace('|', '\\|')
+            lines.append(f'| {r} | {n} | `{cell}` |')
 
     # ── Key metrics ───────────────────────────────────────────────────────────
     lines.append('')

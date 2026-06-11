@@ -127,6 +127,12 @@ def _find_usage(obj: object, depth: int = 0) -> list[dict]:
     return []
 
 
+def repo_rel(path: str, repo_root: str) -> str:
+    """Display helper: shorten a path under repo_root to repo-relative."""
+    repo_sep = repo_root.rstrip(os.sep) + os.sep
+    return path[len(repo_sep):] if path.startswith(repo_sep) else path
+
+
 def _cursor_files_from_entry(entry: dict) -> list[str]:
     """Extract referenced file paths from a Cursor agent-transcript entry (deduplicated)."""
     seen: set[str] = set()

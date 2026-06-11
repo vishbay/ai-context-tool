@@ -107,7 +107,9 @@ def _build_app(root: str):  # noqa: ANN202
     from textual.worker import WorkerState
 
     from cram.context_dir import context_path
-    from cram.audit import _analyze_transcript, _project_transcript_dir, collect_audit
+    from cram.audit import (_analyze_transcript_cached, _project_transcript_dir,
+                            collect_audit)
+    from cram.audit_store import AuditStore
     from cram.health import context_health
 
     DECISIONS_FILE = 'DECISIONS.md'
@@ -309,17 +311,17 @@ def _build_app(root: str):  # noqa: ANN202
                 '',
                 '[b]Cache engagement[/b]',
             ]
+            extra_lines = []
+            if data.get('read_only_sessions'):
+                extra_lines.append(
+                    f'  No-edit sessions           {data["read_only_sessions"]}'
+                    f'   [dim]excluded from pre-edit share[/dim]')
             if data.get('pre_edit_spend_share') is not None:
-                lines.insert(
-                    4,
+                extra_lines.append(
                     f'  Pre-edit context share     {data["pre_edit_spend_share"]:.0%}'
                     f'   [dim]measured · {data.get("pre_edit_measured_sessions", 0)} '
                     f'edit session(s)[/dim]')
-            if data.get('read_only_sessions'):
-                lines.insert(
-                    4,
-                    f'  No-edit sessions           {data["read_only_sessions"]}'
-                    f'   [dim]excluded from pre-edit share[/dim]')
+            lines[4:4] = extra_lines  # after the ratio line, before cache lines
             engaged = data['cache_engaged_sessions']
             blind   = data['cache_blind_sessions']
             total   = data['sessions']
@@ -552,8 +554,13 @@ def _build_app(root: str):  # noqa: ANN202
 
             intervals = _build_task_intervals(root)
 
-            for fpath in files:
-                r = _analyze_transcript(fpath)
+            store = AuditStore.open()
+            try:
+                rows = [_analyze_transcript_cached(store, f) for f in files]
+            finally:
+                store.close()
+
+            for r in rows:
                 if not r:
                     continue
                 mtime    = datetime.fromtimestamp(r['mtime'])

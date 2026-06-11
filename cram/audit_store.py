@@ -13,6 +13,7 @@ Invalidation has two triggers:
 """
 
 from __future__ import annotations
+import functools
 import hashlib
 import json
 import os
@@ -84,6 +85,7 @@ def resolve_db_path() -> str:
     return os.path.join(base, 'cram-ai', 'audit.db')
 
 
+@functools.cache  # constant for the process; spare re-hashing on every open
 def _parser_fingerprint() -> str:
     try:
         with open(audit_events.__file__, 'rb') as f:
