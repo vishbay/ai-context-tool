@@ -299,7 +299,7 @@ def _build_app(root: str):  # noqa: ANN202
             color, label = _BAND_STYLE.get(data['ratio_band'],
                                            ('white', data['ratio_band']))
             lines = [
-                f'[b]Orientation tax — last {data["days"]} days[/b]'
+                f'[b]Agent sessions — last {data["days"]} days[/b]'
                 f'  [dim]({data["provider"]} pricing · set CRAM_PROVIDER to change)[/dim]\n',
                 f'  Sessions analysed          {data["sessions"]}',
                 f'  Reads before first edit    {data["avg_reads_before_edit"]:.1f}   [dim]← primary metric[/dim]',
@@ -309,6 +309,17 @@ def _build_app(root: str):  # noqa: ANN202
                 '',
                 '[b]Cache engagement[/b]',
             ]
+            if data.get('pre_edit_spend_share') is not None:
+                lines.insert(
+                    4,
+                    f'  Pre-edit context share     {data["pre_edit_spend_share"]:.0%}'
+                    f'   [dim]measured · {data.get("pre_edit_measured_sessions", 0)} '
+                    f'edit session(s)[/dim]')
+            if data.get('read_only_sessions'):
+                lines.insert(
+                    4,
+                    f'  Read-only sessions         {data["read_only_sessions"]}'
+                    f'   [dim]excluded from orientation metrics[/dim]')
             engaged = data['cache_engaged_sessions']
             blind   = data['cache_blind_sessions']
             total   = data['sessions']
@@ -396,6 +407,14 @@ def _build_app(root: str):  # noqa: ANN202
                 lines.append(
                     f'  Same-file re-edits/session {data["avg_edit_churn"]:.1f}'
                 )
+
+            top_files = [t for t in data.get('top_read_files', []) if t[1] > 1][:5]
+            if top_files:
+                lines += ['', '[b]Top repeated files[/b]']
+                for fp, r, n in top_files:
+                    lines.append(
+                        f'  {r}× in {n} session{"s" if n != 1 else ""}  [dim]{fp}[/dim]'
+                    )
 
             projects = data.get('projects') or []
             if projects:

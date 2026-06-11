@@ -299,6 +299,7 @@ cram audit --days 7  # tighter window
 cram audit --all     # all projects
 cram audit --json    # structured output for dashboards / scripts
 cram audit --compare PATH_A PATH_B   # side-by-side A/B of two checkouts
+cram audit --reingest                # ignore the cache, re-parse everything
 ```
 
 `--compare` prints both checkouts' metrics with deltas — built for attribution
@@ -313,8 +314,26 @@ Avg edits/session:              3.1
 Avg read-to-edit ratio:         2.6×  ~ normal
 Cache engagement:               18/24 sessions read from cache
 
+Pre-edit context share (measured):
+  Edit sessions:                16/24  (8 read-only excluded — reading was the job)
+  Pre-edit context share:       31%  of 1,580,000 eff. input tokens
+  Pre-edit spend/session:       ~41,200 eff. tokens  (~$0.1236, anthropic pricing)
+
 Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
 ```
+
+Every number is labeled **measured** or **estimated**. The **pre-edit context share**
+is measured and deliberately *descriptive*: it is the input-side token spend (input +
+cache-weighted traffic, provider multipliers applied) of all requests before the
+session's first edit, divided by the session's total input-side spend — summed across
+sessions, so long sessions weigh more. Pre-edit reading is not automatically waste
+(sometimes inspecting unfamiliar code *is* the work), which is why the share is just
+a description; the *avoidable* patterns — repeated cross-session reads, oversized
+carried results, retry loops — are called out separately as findings. Conservatisms:
+read-only sessions are excluded (reading was the job), sessions without token usage
+in their transcripts (e.g. Cursor) are excluded and counted as unmeasured,
+output-token spend is not included, and with fewer than 5 measured sessions the share
+is marked preliminary. The older per-file cost lines remain labeled as estimates.
 
 The cache-engagement line is the silent-failure check: a session that wrote cache but
 never read it back paid the 1.25× write price for nothing — a signal that prompt
@@ -330,10 +349,31 @@ redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20
 tool results — each usually means a retry follows) and same-file re-edits per session
 (a couple is normal; sustained churn means the agent is thrashing).
 
+**Top repeated files** lists the files agents read most, with how many sessions read
+them — cross-session repetition is the concrete evidence for what belongs in a repo
+briefing. (File paths come from Claude/Cursor tool calls; Codex shell reads don't
+carry structured paths and aren't attributed.)
+
+**Findings** close the loop from numbers to action: deterministic rules (no LLM
+judging) that fire only above conservative thresholds, each pairing evidence with a
+fix — repeated cross-session reads → put them in a repo briefing; oversized carried
+tool results → truncate output; cache written but never read → fix caching config;
+sustained failed commands → capture a gotcha; heavy context growth → trim results or
+tune compaction. Findings appear in the report and under `findings` in `--json`.
+
 Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
 (default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
 are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,
-`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers.
+`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers. Pricing and
+thresholds are applied at query time, so changing them never requires a re-parse.
+
+Parsed transcripts are cached in a local SQLite **event store**
+(`~/.local/share/cram-ai/audit.db`, or `$XDG_DATA_HOME/cram-ai/audit.db`; override the
+path with `CRAM_AUDIT_DB`, `:memory:` accepted). Transcripts are re-parsed only when
+they change, so repeat audits are fast. The store is a cache, never source data: it
+rebuilds itself automatically when the schema or parser changes, and if it can't be
+opened at all the audit still runs (uncached) with a note on stderr. `--reingest`
+(alias `--no-cache`) forces a full re-parse.
 
 Run before and after adopting cram to measure the reduction.
 
@@ -445,7 +485,7 @@ across different checkouts or machines.
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
 | `cram status [path]` | Show each context file with age, line count, and token budget status |
-| `cram audit [--days N] [--all] [--json]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
+| `cram audit [--days N] [--all] [--json] [--reingest]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
 | `cram ui [path]` | TUI dashboard — pending decisions, session efficiency, context health (requires `cram-ai[tui]`) |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
@@ -499,6 +539,7 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 | `CRAM_BUDGET_DECISIONS` | `600` | Soft token budget for DECISIONS.md |
 | `CRAM_BUDGET_GOTCHAS` | `400` | Soft token budget for GOTCHAS.md |
 | `CRAM_BUDGET_TASK` | `800` | Soft token budget for CURRENT_TASK.md |
+| `CRAM_AUDIT_DB` | `~/.local/share/cram-ai/audit.db` | Audit event-store cache location (`:memory:` accepted) |
 | `CRAM_PROVIDER` | `anthropic` | Pricing table for audit dollar attribution: `anthropic` / `openai` / `gemini` / `local` |
 | `CRAM_PRICE_INPUT_PER_MTOK` | per provider | Override base input price ($/1M tokens) for audit cost estimates |
 | `CRAM_CACHE_WRITE_MULT` | per provider | Override cache-write multiplier (1.25 on Anthropic) |
@@ -586,4 +627,10 @@ No API key required — all model calls are mocked.
 
 ## License
 
-MIT
+Apache-2.0 — see [LICENSE](LICENSE).
+
+cram is open source and local-first. **The local single-user audit workflow —
+transcript ingestion, the event store, the audit CLI/TUI, findings, and markdown
+reports — will remain open source.** We may later offer paid hosted or team features
+(shared dashboards, org-wide aggregation, scheduled reports, enterprise support)
+built around the open core.
