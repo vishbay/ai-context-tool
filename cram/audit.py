@@ -13,6 +13,7 @@ import glob
 import datetime
 
 from cram import audit_events
+from cram import audit_findings
 from cram import audit_store
 # Back-compat re-exports: these names lived here before the event-store split
 # and are imported by tests and external callers.
@@ -464,7 +465,7 @@ def _collect_audit_inner(store, repo_root: str, days: int,
 
     recent = sorted(all_sessions, key=lambda s: s['mtime'], reverse=True)[:20]
 
-    return {
+    data = {
         'days':                      days,
         'sessions':                  total,
         'avg_reads':                 avg_reads,
@@ -511,6 +512,8 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         'weekly':                    weekly,
         'recent':                    recent,
     }
+    data['findings'] = audit_findings.derive_findings(data)
+    return data
 
 
 def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
@@ -619,6 +622,13 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
         for fp, r, n in repeated_files[:5]:
             disp = fp[len(repo_sep):] if fp.startswith(repo_sep) else fp
             print(f"    {r:>3}× in {n} session{'s' if n != 1 else ''}   {disp}")
+
+    if data['findings']:
+        print()
+        print(f"  Findings ({len(data['findings'])}):")
+        for fd in data['findings']:
+            print(f"    ⚠ {fd['id']:<18} {fd['evidence']}")
+            print(f"      → {fd['fix']}")
     print()
     print(f"  Est. orientation tokens/session: ~{data['orient_tokens_per_session']:,.0f}")
     print(f"  Est. orientation cost/session:   ~${data['orient_cost_per_session']:.4f}  "
