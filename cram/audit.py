@@ -1,4 +1,4 @@
-"""cram audit — measure orientation tax from Claude Code session transcripts.
+"""cram audit — diagnose where AI coding-agent sessions spend tokens and context.
 
 Parsing and metric derivation live in cram.audit_events (adapters produce
 normalized Event streams; derive_session replays them). This module keeps the
@@ -416,8 +416,8 @@ def _collect_audit_inner(store, repo_root: str, days: int,
     sessions_with_errors = sum(1 for s in all_sessions if s['error_results'] > 0)
 
     # Measured orientation: input-side spend before the first edit, as a share
-    # of total input-side spend. Edit sessions only (read-only sessions are
-    # excluded — reading was the job) and only sessions with token usage.
+    # of total input-side spend. Edit sessions only (no-edit sessions are
+    # excluded — reading may have been the job) and only sessions with usage.
     # Effective tokens weight cache traffic by the provider multipliers, applied
     # here at query time so CRAM_PROVIDER changes never require a re-parse.
     edit_session_list  = [s for s in all_sessions if s['edits'] > 0]
@@ -444,7 +444,7 @@ def _collect_audit_inner(store, repo_root: str, days: int,
     file_reads: dict[str, list[int]] = {}
     for s in all_sessions:
         for fp, c in s['read_file_counts'].items():
-            agg = file_reads.setdefault(fp, [0, 0])
+            agg = file_reads.setdefault(os.path.normpath(fp), [0, 0])
             agg[0] += c
             agg[1] += 1
     top_read_files = sorted(
@@ -562,7 +562,7 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
 
     print()
     print(f"  Pre-edit context share (measured):")
-    excl = (f"  ({data['read_only_sessions']} read-only excluded — reading was the job)"
+    excl = (f"  ({data['read_only_sessions']} no-edit sessions excluded)"
             if data['read_only_sessions'] else '')
     print(f"    Edit sessions:                {data['edit_sessions']}/{total}{excl}")
     if data['pre_edit_measured_sessions']:
@@ -757,7 +757,8 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         prog='cram audit',
-        description='Measure orientation tax from Claude Code session transcripts',
+        description='Audit AI coding-agent sessions: where tokens and context '
+                    'go, with evidence-backed findings',
     )
     parser.add_argument('--days', type=int, default=30,
                         help='Look back N days (default: 30)')

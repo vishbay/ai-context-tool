@@ -515,11 +515,17 @@ def derive_session(meta: SessionMeta, events: list[Event],
                 if not _under(extras.get('workdir') or ''):
                     continue
             else:
-                files = extras.get('files') or []
+                # Codex apply_patch paths are usually repo-relative
+                # ("cram/audit.py"); resolve against the session cwd before the
+                # repo check. Deliberate fix over the legacy analyzer, which
+                # compared raw paths and dropped relative-path edits.
+                cwd = extras.get('cwd') or ''
+                files = [f if os.path.isabs(f) else os.path.normpath(os.path.join(cwd, f))
+                         for f in (extras.get('files') or [])]
                 if files:
                     if not any(_under(f) for f in files):
                         continue
-                elif not _under(extras.get('cwd') or ''):
+                elif not _under(cwd):
                     continue
 
         if kind == 'read':

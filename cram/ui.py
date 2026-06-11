@@ -318,8 +318,8 @@ def _build_app(root: str):  # noqa: ANN202
             if data.get('read_only_sessions'):
                 lines.insert(
                     4,
-                    f'  Read-only sessions         {data["read_only_sessions"]}'
-                    f'   [dim]excluded from orientation metrics[/dim]')
+                    f'  No-edit sessions           {data["read_only_sessions"]}'
+                    f'   [dim]excluded from pre-edit share[/dim]')
             engaged = data['cache_engaged_sessions']
             blind   = data['cache_blind_sessions']
             total   = data['sessions']

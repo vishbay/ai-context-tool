@@ -61,7 +61,7 @@ class TestRenderReport:
         # pre-edit eff = 5000 of total 8000 = 62.5% → 62% (round-half-even)
         assert '**Pre-edit context share: 62%** of 8,000 effective input tokens' in md
         assert '**Preliminary**' in md  # only 2 measured sessions
-        assert '1 read-only (excluded — reading was the job)' in md
+        assert '1 no-edit sessions (excluded' in md
         assert '## Findings' in md
         assert 'repeated-reads' in md and 'high-orientation' in md
         assert '## Top repeated files' in md
