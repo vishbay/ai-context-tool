@@ -627,4 +627,10 @@ No API key required — all model calls are mocked.
 
 ## License
 
-MIT
+Apache-2.0 — see [LICENSE](LICENSE).
+
+cram is open source and local-first. **The local single-user audit workflow —
+transcript ingestion, the event store, the audit CLI/TUI, findings, and markdown
+reports — will remain open source.** We may later offer paid hosted or team features
+(shared dashboards, org-wide aggregation, scheduled reports, enterprise support)
+built around the open core.
