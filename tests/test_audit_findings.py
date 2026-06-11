@@ -11,8 +11,8 @@ def _data(**overrides):
     base = {
         'sessions':                  10,
         'top_read_files':            [('a.py', 1, 1)],
-        'orient_tax_pct':            0.10,
-        'orient_measured_sessions':  8,
+        'pre_edit_spend_share':            0.10,
+        'pre_edit_measured_sessions':  8,
         'sessions_with_big_results': 0,
         'big_result_bytes':          20_000,
         'carried_cost_per_session':  0.0,
@@ -43,13 +43,13 @@ class TestRules:
         assert derive_findings(_data(top_read_files=[('x.py', 7, 1)])) == []
 
     def test_high_orientation_threshold(self):
-        assert derive_findings(_data(orient_tax_pct=0.24)) == []
-        f = derive_findings(_data(orient_tax_pct=0.25))
+        assert derive_findings(_data(pre_edit_spend_share=0.24)) == []
+        f = derive_findings(_data(pre_edit_spend_share=0.25))
         assert [x['id'] for x in f] == ['high-orientation']
         assert '25%' in f[0]['evidence']
 
     def test_unmeasured_orientation_never_fires(self):
-        assert derive_findings(_data(orient_tax_pct=None)) == []
+        assert derive_findings(_data(pre_edit_spend_share=None)) == []
 
     def test_oversized_results(self):
         f = derive_findings(_data(sessions_with_big_results=3,
@@ -81,7 +81,7 @@ class TestRules:
     def test_multiple_findings_stable_order(self):
         f = derive_findings(_data(
             top_read_files=[('hot.py', 4, 3)],
-            orient_tax_pct=0.40,
+            pre_edit_spend_share=0.40,
             cache_blind_sessions=1,
             avg_edit_churn=3.0,
         ))

@@ -59,7 +59,8 @@ class TestRenderReport:
         assert md.startswith('# Agent session audit — ')
         assert '## Headline' in md
         # pre-edit eff = 5000 of total 8000 = 62.5% → 62% (round-half-even)
-        assert '**62% of input-side spend lands before the first edit**' in md
+        assert '**Pre-edit context share: 62%** of 8,000 effective input tokens' in md
+        assert '**Preliminary**' in md  # only 2 measured sessions
         assert '1 read-only (excluded — reading was the job)' in md
         assert '## Findings' in md
         assert 'repeated-reads' in md and 'high-orientation' in md
@@ -76,7 +77,7 @@ class TestRenderReport:
         ])
         data = collect_audit(str(tmp_path), days=365)
         md = render_report(data, str(tmp_path))
-        assert '**Orientation share not measurable**' in md
+        assert '**Pre-edit context share not measurable**' in md
         assert '%' not in md.split('## Findings')[0].split('Headline')[1] or True
         assert '## Top repeated files' not in md  # nothing repeated
 

@@ -111,9 +111,9 @@ class TestAggregateMeasured:
         ]])
         data = collect_audit(str(tmp_path), days=365)
         assert data['edit_sessions'] == 1
-        assert data['orient_measured_sessions'] == 1
-        assert abs(data['orient_tax_pct'] - 0.25) < 1e-9
-        assert abs(data['orient_spend_eff_tokens'] - 1_000) < 1e-9
+        assert data['pre_edit_measured_sessions'] == 1
+        assert abs(data['pre_edit_spend_share'] - 0.25) < 1e-9
+        assert abs(data['pre_edit_spend_eff_tokens'] - 1_000) < 1e-9
 
     def test_tax_pct_applies_cache_multipliers(self, tmp_path, monkeypatch):
         # anthropic defaults: write 1.25×, read 0.10×.
@@ -125,7 +125,7 @@ class TestAggregateMeasured:
             _usage(cache_read=30_000),
         ]])
         data = collect_audit(str(tmp_path), days=365)
-        assert abs(data['orient_tax_pct'] - 2_250 / 5_250) < 1e-9
+        assert abs(data['pre_edit_spend_share'] - 2_250 / 5_250) < 1e-9
 
     def test_read_only_sessions_segmented_out(self, tmp_path, monkeypatch):
         self._setup(tmp_path, monkeypatch, [
@@ -139,7 +139,7 @@ class TestAggregateMeasured:
         assert data['read_only_sessions'] == 1
         assert data['edit_sessions'] == 1
         # the read-only session's 9,999 tokens must not inflate the tax
-        assert abs(data['orient_tax_pct'] - 0.5) < 1e-9
+        assert abs(data['pre_edit_spend_share'] - 0.5) < 1e-9
 
     def test_edit_session_without_usage_is_unmeasured(self, tmp_path, monkeypatch):
         self._setup(tmp_path, monkeypatch, [
@@ -147,11 +147,11 @@ class TestAggregateMeasured:
         ])
         data = collect_audit(str(tmp_path), days=365)
         assert data['edit_sessions'] == 1
-        assert data['orient_measured_sessions'] == 0
-        assert data['orient_unmeasured_edit_sessions'] == 1
-        assert data['orient_tax_pct'] is None
-        assert data['orient_spend_eff_tokens'] is None
-        assert data['orient_spend_cost'] is None
+        assert data['pre_edit_measured_sessions'] == 0
+        assert data['pre_edit_unmeasured_sessions'] == 1
+        assert data['pre_edit_spend_share'] is None
+        assert data['pre_edit_spend_eff_tokens'] is None
+        assert data['pre_edit_spend_cost'] is None
 
     def test_all_read_only_yields_none(self, tmp_path, monkeypatch):
         self._setup(tmp_path, monkeypatch, [
@@ -160,7 +160,7 @@ class TestAggregateMeasured:
         data = collect_audit(str(tmp_path), days=365)
         assert data['edit_sessions'] == 0
         assert data['read_only_sessions'] == 1
-        assert data['orient_tax_pct'] is None
+        assert data['pre_edit_spend_share'] is None
 
     def test_local_provider_zeroes_cache_weighting(self, tmp_path, monkeypatch):
         # With CRAM_PROVIDER=local the multipliers are 0, so eff = raw input.
@@ -175,7 +175,7 @@ class TestAggregateMeasured:
                 _usage(input_tokens=1_000, cache_read=90_000),
             ]])
             data = _audit_mod.collect_audit(str(tmp_path), days=365)
-            assert abs(data['orient_tax_pct'] - 0.5) < 1e-9
+            assert abs(data['pre_edit_spend_share'] - 0.5) < 1e-9
         finally:
             monkeypatch.delenv('CRAM_PROVIDER', raising=False)
             importlib.reload(_audit_mod)
@@ -189,8 +189,9 @@ class TestAggregateMeasured:
         ]])
         run_audit(str(tmp_path), days=365)
         out = capsys.readouterr().out
-        assert 'Orientation (measured)' in out
+        assert 'Pre-edit context share (measured)' in out
         assert '25%' in out
+        assert 'preliminary' in out  # 1 measured session < threshold
         assert 'Est. orientation' in out  # estimated block keeps its label
 
     def test_json_includes_new_keys(self, tmp_path, monkeypatch, capsys):
@@ -201,7 +202,7 @@ class TestAggregateMeasured:
         ]])
         run_audit(str(tmp_path), days=365, as_json=True)
         parsed = json.loads(capsys.readouterr().out)
-        assert parsed['orient_tax_pct'] == 1.0
+        assert parsed['pre_edit_spend_share'] == 1.0
         assert parsed['edit_sessions'] == 1
 
     def test_compare_renders_dash_for_unmeasured_arm(self, tmp_path, monkeypatch, capsys):
@@ -227,5 +228,5 @@ class TestAggregateMeasured:
         monkeypatch.setattr(_audit_mod, '_codex_sessions_dir', lambda: None)
         run_compare(repo_a, repo_b, days=365)
         out = capsys.readouterr().out
-        line = next(l for l in out.splitlines() if 'Orientation tax %' in l)
+        line = next(l for l in out.splitlines() if 'Pre-edit spend share' in l)
         assert '—' in line

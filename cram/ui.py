@@ -299,7 +299,7 @@ def _build_app(root: str):  # noqa: ANN202
             color, label = _BAND_STYLE.get(data['ratio_band'],
                                            ('white', data['ratio_band']))
             lines = [
-                f'[b]Orientation tax — last {data["days"]} days[/b]'
+                f'[b]Agent sessions — last {data["days"]} days[/b]'
                 f'  [dim]({data["provider"]} pricing · set CRAM_PROVIDER to change)[/dim]\n',
                 f'  Sessions analysed          {data["sessions"]}',
                 f'  Reads before first edit    {data["avg_reads_before_edit"]:.1f}   [dim]← primary metric[/dim]',
@@ -309,11 +309,11 @@ def _build_app(root: str):  # noqa: ANN202
                 '',
                 '[b]Cache engagement[/b]',
             ]
-            if data.get('orient_tax_pct') is not None:
+            if data.get('pre_edit_spend_share') is not None:
                 lines.insert(
                     4,
-                    f'  Orientation share of spend {data["orient_tax_pct"]:.0%}'
-                    f'   [dim]measured · {data.get("orient_measured_sessions", 0)} '
+                    f'  Pre-edit context share     {data["pre_edit_spend_share"]:.0%}'
+                    f'   [dim]measured · {data.get("pre_edit_measured_sessions", 0)} '
                     f'edit session(s)[/dim]')
             if data.get('read_only_sessions'):
                 lines.insert(

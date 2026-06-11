@@ -34,22 +34,29 @@ def render_report(data: dict, repo_root: str) -> str:
     lines.append('')
     lines.append('## Headline')
     lines.append('')
-    if data['orient_tax_pct'] is not None:
-        lines.append(f'**{data["orient_tax_pct"]:.0%} of input-side spend lands '
-                     f'before the first edit** (measured across '
-                     f'{data["orient_measured_sessions"]} edit session'
-                     f'{"s" if data["orient_measured_sessions"] != 1 else ""}).')
-        if data['orient_spend_eff_tokens'] is not None:
-            lines.append(f'Orientation spend: ~{data["orient_spend_eff_tokens"]:,.0f} '
-                         f'eff. tokens/session (~${data["orient_spend_cost"]:.4f}).')
+    if data['pre_edit_spend_share'] is not None:
+        n_meas = data['pre_edit_measured_sessions']
+        prelim = (f'**Preliminary** — only {n_meas} measured edit session'
+                  f'{"s" if n_meas != 1 else ""}. '
+                  if data.get('pre_edit_preliminary') else '')
+        lines.append(f'{prelim}**Pre-edit context share: '
+                     f'{data["pre_edit_spend_share"]:.0%}** of '
+                     f'{data["pre_edit_eff_total_tokens"]:,.0f} effective input '
+                     f'tokens across {n_meas} measured edit session'
+                     f'{"s" if n_meas != 1 else ""}. This is descriptive: it says '
+                     f'how much context-gathering precedes editing, not that all '
+                     f'of it is waste — see Findings for the avoidable patterns.')
+        if data['pre_edit_spend_eff_tokens'] is not None:
+            lines.append(f'Pre-edit spend: ~{data["pre_edit_spend_eff_tokens"]:,.0f} '
+                         f'eff. tokens/session (~${data["pre_edit_spend_cost"]:.4f}).')
     else:
-        lines.append('**Orientation share not measurable** — no edit sessions '
+        lines.append('**Pre-edit context share not measurable** — no edit sessions '
                      'with token usage in this window (estimates below).')
     lines.append('')
     seg = (f'{total} total — {data["edit_sessions"]} edit session'
            f'{"s" if data["edit_sessions"] != 1 else ""}')
-    if data['orient_measured_sessions']:
-        seg += f' ({data["orient_measured_sessions"]} measured)'
+    if data['pre_edit_measured_sessions']:
+        seg += f' ({data["pre_edit_measured_sessions"]} measured)'
     if data['read_only_sessions']:
         seg += (f', {data["read_only_sessions"]} read-only '
                 f'(excluded — reading was the job)')
@@ -149,10 +156,11 @@ def render_report(data: dict, repo_root: str) -> str:
     lines.append('')
     lines.append('---')
     lines.append('')
-    lines.append('*Methodology: the orientation share is the input-side token '
-                 'spend (input + cache traffic weighted by provider multipliers) '
-                 'of all requests before each session\'s first edit, divided by '
-                 'total input-side spend, summed across measured sessions. '
+    lines.append('*Methodology: the pre-edit context share is the input-side '
+                 'token spend (input + cache traffic weighted by provider '
+                 'multipliers) of all requests before each session\'s first '
+                 'edit, divided by total input-side spend, summed across '
+                 'measured sessions. It is descriptive, not a waste claim. '
                  'Conservative by construction: read-only sessions are excluded '
                  '(reading was the job), sessions without token usage are '
                  'excluded and reported as unmeasured, and output-token spend is '

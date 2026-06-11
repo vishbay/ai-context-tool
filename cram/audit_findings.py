@@ -37,13 +37,13 @@ def derive_findings(data: dict) -> list[dict]:
         })
 
     # Measured orientation share above threshold.
-    pct = data['orient_tax_pct']
+    pct = data['pre_edit_spend_share']
     if pct is not None and pct >= HIGH_ORIENTATION_PCT:
         findings.append({
             'id': 'high-orientation',
             'severity': 'warn',
             'evidence': f"{pct:.0%} of input-side spend lands before the first "
-                        f"edit ({data['orient_measured_sessions']} sessions measured)",
+                        f"edit ({data['pre_edit_measured_sessions']} sessions measured)",
             'fix': 'Front-load repo context (architecture summary, briefing) '
                    'instead of letting each session rediscover it.',
         })

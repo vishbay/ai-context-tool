@@ -431,10 +431,12 @@ def _collect_audit_inner(store, repo_root: str, days: int,
                        s['pre_edit_cache_reads']) for s in measured)
     eff_tot = sum(_eff(s['input_tokens'], s['cache_writes'], s['cache_reads'])
                   for s in measured)
-    orient_tax_pct          = eff_pre / eff_tot if measured and eff_tot else None
-    orient_spend_eff_tokens = eff_pre / len(measured) if measured else None
-    orient_spend_cost       = (orient_spend_eff_tokens * AUDIT_BASE_PRICE
-                               if orient_spend_eff_tokens is not None else None)
+    pre_edit_spend_share      = eff_pre / eff_tot if measured and eff_tot else None
+    pre_edit_spend_eff_tokens = eff_pre / len(measured) if measured else None
+    pre_edit_spend_cost       = (pre_edit_spend_eff_tokens * AUDIT_BASE_PRICE
+                                 if pre_edit_spend_eff_tokens is not None else None)
+    # Below this many measured sessions the share is reported as preliminary.
+    PRELIMINARY_MIN_MEASURED = 5
 
     # Per-file evidence: total reads per file across sessions, and in how many
     # sessions each file was read. Cross-session repetition is the orientation
@@ -496,11 +498,13 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         # Measured orientation (new, additive; None when unmeasurable)
         'edit_sessions':                   len(edit_session_list),
         'read_only_sessions':              read_only_sessions,
-        'orient_measured_sessions':        len(measured),
-        'orient_unmeasured_edit_sessions': len(edit_session_list) - len(measured),
-        'orient_tax_pct':                  orient_tax_pct,
-        'orient_spend_eff_tokens':         orient_spend_eff_tokens,
-        'orient_spend_cost':               orient_spend_cost,
+        'pre_edit_measured_sessions':        len(measured),
+        'pre_edit_unmeasured_sessions': len(edit_session_list) - len(measured),
+        'pre_edit_spend_share':            pre_edit_spend_share,
+        'pre_edit_spend_eff_tokens':       pre_edit_spend_eff_tokens,
+        'pre_edit_spend_cost':             pre_edit_spend_cost,
+        'pre_edit_eff_total_tokens':       eff_tot if measured else None,
+        'pre_edit_preliminary':            bool(measured) and len(measured) < PRELIMINARY_MIN_MEASURED,
         'top_read_files':                  top_read_files,
         # Estimated orientation (legacy model: assumed tokens/file)
         'orient_tokens_per_session': orient_tok_per_session,
@@ -544,7 +548,7 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
 
     total = data['sessions']
 
-    print(f"\nOrientation tax audit — last {days} days\n")
+    print(f"\nAgent session audit — last {days} days\n")
     print(f"  Sessions analysed:              {total}")
     print(f"  Avg reads/session:              {data['avg_reads']:.1f}")
     print(f"  Avg reads before first edit:    {data['avg_reads_before_edit']:.1f}  ← primary metric")
@@ -557,23 +561,26 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
               f"check that prompt caching is engaging")
 
     print()
-    print(f"  Orientation (measured):")
+    print(f"  Pre-edit context share (measured):")
     excl = (f"  ({data['read_only_sessions']} read-only excluded — reading was the job)"
             if data['read_only_sessions'] else '')
     print(f"    Edit sessions:                {data['edit_sessions']}/{total}{excl}")
-    if data['orient_measured_sessions']:
-        if data['orient_unmeasured_edit_sessions']:
-            print(f"    With token usage:             {data['orient_measured_sessions']}"
+    if data['pre_edit_measured_sessions']:
+        if data['pre_edit_unmeasured_sessions']:
+            print(f"    With token usage:             {data['pre_edit_measured_sessions']}"
                   f"/{data['edit_sessions']} measured"
-                  f"  ({data['orient_unmeasured_edit_sessions']} lack usage data)")
-        if data['orient_tax_pct'] is not None:
-            print(f"    Orientation share of spend:   {data['orient_tax_pct']:.0%}"
-                  f"  of input-side spend lands before the first edit")
-        if data['orient_spend_eff_tokens'] is not None:
-            print(f"    Orientation spend/session:    ~{data['orient_spend_eff_tokens']:,.0f} eff. tokens"
-                  f"  (~${data['orient_spend_cost']:.4f}, {data['provider']} pricing)")
+                  f"  ({data['pre_edit_unmeasured_sessions']} lack usage data)")
+        prelim = (f"  ⚠ preliminary — only {data['pre_edit_measured_sessions']} "
+                  f"measured session{'s' if data['pre_edit_measured_sessions'] != 1 else ''}"
+                  if data['pre_edit_preliminary'] else '')
+        if data['pre_edit_spend_share'] is not None:
+            print(f"    Pre-edit context share:       {data['pre_edit_spend_share']:.0%}"
+                  f"  of {data['pre_edit_eff_total_tokens']:,.0f} eff. input tokens{prelim}")
+        if data['pre_edit_spend_eff_tokens'] is not None:
+            print(f"    Pre-edit spend/session:       ~{data['pre_edit_spend_eff_tokens']:,.0f} eff. tokens"
+                  f"  (~${data['pre_edit_spend_cost']:.4f}, {data['provider']} pricing)")
     elif data['edit_sessions']:
-        print(f"    No token usage in these sessions — measured orientation "
+        print(f"    No token usage in these sessions — measured share "
               f"unavailable (estimates below)")
 
     if data['avg_requests']:
@@ -683,7 +690,7 @@ def _resolve_root(path: str) -> str:
 # Rows for the side-by-side comparison: (label, summary key, format).
 _COMPARE_ROWS = [
     ('Sessions analysed',          'sessions',                '{:.0f}'),
-    ('Orientation tax % (meas.)',  'orient_tax_pct',          '{:.1%}'),
+    ('Pre-edit spend share (meas.)', 'pre_edit_spend_share',        '{:.1%}'),
     ('Reads before first edit ←',  'avg_reads_before_edit',   '{:.1f}'),
     ('Read-to-edit ratio',         'avg_ratio',               '{:.1f}'),
     ('Edits/session',              'avg_edits',               '{:.1f}'),
