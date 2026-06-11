@@ -299,6 +299,7 @@ cram audit --days 7  # tighter window
 cram audit --all     # all projects
 cram audit --json    # structured output for dashboards / scripts
 cram audit --compare PATH_A PATH_B   # side-by-side A/B of two checkouts
+cram audit --reingest                # ignore the cache, re-parse everything
 ```
 
 `--compare` prints both checkouts' metrics with deltas — built for attribution
@@ -333,7 +334,16 @@ tool results — each usually means a retry follows) and same-file re-edits per 
 Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
 (default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
 are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,
-`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers.
+`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers. Pricing and
+thresholds are applied at query time, so changing them never requires a re-parse.
+
+Parsed transcripts are cached in a local SQLite **event store**
+(`~/.local/share/cram-ai/audit.db`, or `$XDG_DATA_HOME/cram-ai/audit.db`; override the
+path with `CRAM_AUDIT_DB`, `:memory:` accepted). Transcripts are re-parsed only when
+they change, so repeat audits are fast. The store is a cache, never source data: it
+rebuilds itself automatically when the schema or parser changes, and if it can't be
+opened at all the audit still runs (uncached) with a note on stderr. `--reingest`
+(alias `--no-cache`) forces a full re-parse.
 
 Run before and after adopting cram to measure the reduction.
 
@@ -445,7 +455,7 @@ across different checkouts or machines.
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
 | `cram status [path]` | Show each context file with age, line count, and token budget status |
-| `cram audit [--days N] [--all] [--json]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
+| `cram audit [--days N] [--all] [--json] [--reingest]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
 | `cram ui [path]` | TUI dashboard — pending decisions, session efficiency, context health (requires `cram-ai[tui]`) |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
@@ -499,6 +509,7 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 | `CRAM_BUDGET_DECISIONS` | `600` | Soft token budget for DECISIONS.md |
 | `CRAM_BUDGET_GOTCHAS` | `400` | Soft token budget for GOTCHAS.md |
 | `CRAM_BUDGET_TASK` | `800` | Soft token budget for CURRENT_TASK.md |
+| `CRAM_AUDIT_DB` | `~/.local/share/cram-ai/audit.db` | Audit event-store cache location (`:memory:` accepted) |
 | `CRAM_PROVIDER` | `anthropic` | Pricing table for audit dollar attribution: `anthropic` / `openai` / `gemini` / `local` |
 | `CRAM_PRICE_INPUT_PER_MTOK` | per provider | Override base input price ($/1M tokens) for audit cost estimates |
 | `CRAM_CACHE_WRITE_MULT` | per provider | Override cache-write multiplier (1.25 on Anthropic) |
