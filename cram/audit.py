@@ -653,6 +653,24 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
     print("  and re-audit to verify the share actually drops.")
 
 
+def run_report(repo_root: str, days: int = 30, all_projects: bool = False,
+               out_path: str = '-', reingest: bool = False) -> None:
+    """Render the markdown report to stdout (out_path '-') or a file."""
+    from cram.audit_report import render_report
+    data = collect_audit(repo_root, days=days, all_projects=all_projects,
+                         reingest=reingest)
+    if data is None:
+        print(f"No sessions found in the last {days} days.")
+        return
+    md = render_report(data, repo_root)
+    if out_path == '-':
+        print(md)
+    else:
+        with open(out_path, 'w') as f:
+            f.write(md)
+        print(f"Wrote {out_path}")
+
+
 def _resolve_root(path: str) -> str:
     from cram.utils import find_git_root
     start = os.path.abspath(path)
@@ -747,6 +765,10 @@ def main() -> None:
     parser.add_argument('--reingest', '--no-cache', action='store_true',
                         dest='reingest',
                         help='Ignore the audit cache and re-parse all transcripts')
+    parser.add_argument('--report', nargs='?', const='-', default=None,
+                        metavar='FILE',
+                        help='Emit a shareable markdown report '
+                             '(to FILE, or stdout if omitted)')
     parser.add_argument('--path', default=None, metavar='REPO_PATH')
     args = parser.parse_args()
 
@@ -756,6 +778,11 @@ def main() -> None:
         return
 
     root = _resolve_root(args.path) if args.path else _resolve_root(os.getcwd())
+
+    if args.report is not None:
+        run_report(root, days=args.days, all_projects=args.all_projects,
+                   out_path=args.report, reingest=args.reingest)
+        return
 
     run_audit(root, days=args.days, all_projects=args.all_projects,
               as_json=args.as_json, reingest=args.reingest)
