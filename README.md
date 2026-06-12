@@ -315,7 +315,7 @@ Avg read-to-edit ratio:         2.6×  ~ normal
 Cache engagement:               18/24 sessions read from cache
 
 Pre-edit context share (measured):
-  Edit sessions:                16/24  (8 read-only excluded — reading was the job)
+  Edit sessions:                16/24  (8 no-edit sessions excluded)
   Pre-edit context share:       31%  of 1,580,000 eff. input tokens
   Pre-edit spend/session:       ~41,200 eff. tokens  (~$0.1236, anthropic pricing)
 
@@ -330,8 +330,9 @@ sessions, so long sessions weigh more. Pre-edit reading is not automatically was
 (sometimes inspecting unfamiliar code *is* the work), which is why the share is just
 a description; the *avoidable* patterns — repeated cross-session reads, oversized
 carried results, retry loops — are called out separately as findings. Conservatisms:
-read-only sessions are excluded (reading was the job), sessions without token usage
-in their transcripts (e.g. Cursor) are excluded and counted as unmeasured,
+no-edit sessions are excluded (reviews, Q&A, abandoned runs — reading may have been
+the job), sessions without token usage in their transcripts (e.g. Cursor) are excluded
+and counted as unmeasured,
 output-token spend is not included, and with fewer than 5 measured sessions the share
 is marked preliminary. The older per-file cost lines remain labeled as estimates.
 
@@ -564,19 +565,18 @@ re-discovering the codebase — reading files, running searches, building orient
 | Output | Code written, explanations | 5–15K |
 | **Per task total** | | **50–130K** |
 
-The orientation phase is pure re-discovery overhead — the agent reads roughly 8 files cold
-each session to figure out where to work. cram replaces that with one `get_context()` call
-returning ~1–2K tokens of targeted excerpts.
+Some of the orientation phase is necessary (inspecting unfamiliar code is sometimes the
+work); some of it is re-discovery — the same files re-read session after session. cram
+doesn't guess which is which: `cram audit` measures your actual pre-edit context share and
+the findings point at the avoidable patterns (repeated cross-session reads, oversized
+carried results, retry loops), each with a suggested fix.
 
-You can measure your actual overhead with `cram audit`. The read-to-edit ratio — reads before
-first edit divided by total edits — tells you how much of each session is navigation vs. work.
-Ratio > 5× means context isn't landing.
+**What the context layer targets:**
 
-**What cram removes:**
-
-cram eliminates the cold-start orientation overhead per session. It does **not** replace
-the agent's productive reads (edits, tests, active work). The savings are orientation-only,
-not total-session savings.
+One of those fixes is cram's own context layer: a `get_context()` call returning ~1–2K
+tokens of targeted excerpts instead of cold re-reads. It targets repeated re-discovery
+only — it does **not** replace the agent's productive reads (edits, tests, active work).
+Whether it helps in your repo is measurable: apply it, re-audit, and compare.
 
 Run `cram benchmark` for a full token and cost breakdown across all three delivery strategies
 and model tiers. Run `cram audit` to measure your actual read-to-edit ratio.

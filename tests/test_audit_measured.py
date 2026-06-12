@@ -230,3 +230,41 @@ class TestAggregateMeasured:
         out = capsys.readouterr().out
         line = next(l for l in out.splitlines() if 'Pre-edit spend share' in l)
         assert '—' in line
+
+
+class TestCodexRelativePatchPaths:
+    """Codex apply_patch paths are usually repo-relative; they must resolve
+    against the session cwd. Deliberate fix over the legacy analyzer, which
+    compared raw paths against the absolute repo root and dropped the edits."""
+
+    def test_relative_patch_in_repo_cwd_is_counted(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 's.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _exec_cmd(f'cat {repo}/a.py', repo),
+            _apply_patch('*** Update File: cram/audit.py\n--- a\n+++ b\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r is not None
+        assert r['edits'] == 1
+
+    def test_relative_patch_in_other_cwd_not_counted(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        other = str(tmp_path / 'other')
+        path = str(tmp_path / 's.jsonl')
+        _write_codex_jsonl(path, other, [
+            _apply_patch('*** Update File: cram/audit.py\n--- a\n+++ b\n'),
+        ])
+        assert _analyze_codex_transcript(path, repo) is None
+
+    def test_relative_and_absolute_merge_for_churn(self, tmp_path):
+        repo = str(tmp_path / 'repo')
+        path = str(tmp_path / 's.jsonl')
+        _write_codex_jsonl(path, repo, [
+            _apply_patch('*** Update File: cram/a.py\n--- a\n+++ b\n'),
+            _apply_patch(f'*** Update File: {repo}/cram/a.py\n--- a\n+++ c\n'),
+        ])
+        r = _analyze_codex_transcript(path, repo)
+        assert r['edits'] == 2
+        assert r['edit_churn'] == 1  # same file via two spellings
+        assert r['edit_file_counts'] == {f'{repo}/cram/a.py': 2}
