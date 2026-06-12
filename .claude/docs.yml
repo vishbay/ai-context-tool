@@ -15,10 +15,13 @@ pages:
       - README.md
     type: assessment
 
-  - file: cram-ai-design-retrospective.html
+  # cram-ai-design-retrospective.html is frozen as a historical artifact
+  # (pre-pivot); it carries a banner pointing at v2. Do not regenerate.
+
+  - file: cram-ai-design-retrospective-v2.html
     source:
       - PLAN_AUDIT_PIVOT.md
-      - SideQuests/p0-experiment-log.md
+      - README.md
     type: retrospective
 
   - file: p0-attribution-experiment.html

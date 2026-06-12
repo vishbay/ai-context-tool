@@ -1,7 +1,12 @@
 # PLAN — Pivot to cram audit (agent token-waste observability)
 
-Status: **in progress** (June 2026)
-Companion docs: `orientation-tax-idea-assessment.html`, `cram-ai-external-review-*.html` (SideQuests)
+Status: **executed through P2; shipped as v0.4.0** (June 2026). The headline metric
+is now the measured **pre-edit context share** ("orientation tax" survives only as
+finding language); the audit runs on a parity-gated SQLite event store with per-file
+drilldown, a findings engine, and `--report`. First real reading: 13.4% share across
+183 sessions, 84% no-edit sessions excluded.
+Companion docs: `orientation-tax-idea-assessment.html`, `cram-ai-external-review-editorial.html`,
+`cram-ai-design-retrospective-v2.html` (SideQuests)
 
 ## The goal we are attacking
 
@@ -36,12 +41,13 @@ remediation among several.** The pivot is mostly deletion and re-framing, not a 
 
 ## Phases
 
-### P0 — The attribution experiment (validates everything else)
-Two weeks of real work. Alternate tasks with/without `get_context()`, session
-discipline held constant. This is the number the pivot stands on.
-**Tooling ready (2026-06-10):** `cram audit --compare PATH_A PATH_B`; control
-checkout at `~/cram-ai-control` (wiring neutralized via skip-worktree); protocol
-and task log in `~/SideQuests/p0-experiment-log.md`. **Remaining: run it.**
+### P0 — The attribution experiment ~~(validates everything else)~~
+**Demoted (2026-06-11) to optional internal evidence.** The product claim became
+"cram diagnoses where agent-session spend goes, with evidence" — which needs
+measurement credibility, not P0. P0 remains the right protocol for the narrower
+claim that context loading reduces pre-edit share; tooling stays ready
+(`cram audit --compare`, control checkout, auto-logged task log), and a faster
+paired-probe variant is documented in the runbook. Passive collection continues.
 
 ### P1 — Deepen the audit (buckets 2–5)
 - ~~Extend `cram/audit.py`: context-per-request, read-cost tail share, carried cost of
@@ -54,12 +60,13 @@ and task log in `~/SideQuests/p0-experiment-log.md`. **Remaining: run it.**
   `cost_model.py`~~ **done** — `CRAM_PROVIDER` selects, field-level env overrides,
   audit dollar attribution wired through it. **P1 complete.**
 
-### P2 — Audit-first `cram ui`
-- New **Audit** tab as the default landing tab: headline metrics (reads-before-first-edit,
-  read-to-edit ratio with band, cache writes/session, cache-engagement check),
-  per-session table, ratio trend.
-- Sessions tab stays (drill-down); Decisions/Health/Actions remain but move after Audit.
-- This is what developers and platform teams expect to see first: *the number*, not the knobs.
+### P2 — Audit-first `cram ui` — **done** (v0.4.0)
+- ~~New **Audit** tab as the default landing tab~~ done — pre-edit context share,
+  no-edit split, cache engagement, bloat metrics, top repeated files, weekly trend;
+  Sessions tab reads through the event-store cache.
+- Beyond the original scope, also shipped: SQLite event store with parity gate,
+  measured pre-edit share + segmentation, per-file drilldown, deterministic findings
+  engine, `cram audit --report` (markdown), Apache-2.0 + test CI, v0.4.0 on PyPI.
 
 ### P3 — Team/gateway story (after P0–P2 validate)
 - Ingest adapter for gateway usage exports (CSV/JSON) alongside local transcripts.
