@@ -4,12 +4,21 @@
 [![Python](https://img.shields.io/pypi/pyversions/cram-ai?color=%2300f5d4&style=flat-square)](https://pypi.org/project/cram-ai/)
 [![License](https://img.shields.io/github/license/vishbay/cram-ai?color=%23f72585&style=flat-square)](LICENSE)
 
-cram prevents expensive exploratory file reads by pre-loading focused project, task, symbol,
-decision, and gotcha context before coding starts. Instead of spending the first few exchanges
-re-discovering your codebase, your AI tool arrives oriented.
+cram audits your AI coding-agent sessions — **Claude Code, Cursor, Codex** — straight from
+the transcripts already on your disk, and shows where the tokens went: how much spend lands
+before the first edit, which files agents re-read session after session, oversized tool
+results carried turn after turn, retry loops. Every number is labeled **measured** or
+**estimated**, and deterministic findings pair evidence with a concrete fix. No setup, no
+instrumentation, nothing leaves your machine.
 
-Works with **Claude Code, Cursor, Windsurf, Zed, Codex, GitHub Copilot, Gemini CLI**, and any
-tool that reads a file on startup. Custom tool targets are supported via config.
+One of those fixes ships with cram: a **context layer** that pre-loads focused project, task,
+symbol, decision, and gotcha context so your tool arrives oriented instead of re-discovering
+the codebase each session. Apply a fix — cram's or any other — then re-audit to verify it
+actually helped.
+
+The context layer works with **Claude Code, Cursor, Windsurf, Zed, Codex, GitHub Copilot,
+Gemini CLI**, and any tool that reads a file on startup. Custom tool targets are supported
+via config.
 
 ---
 
@@ -30,12 +39,22 @@ pip install 'cram-ai[mcp,multi-provider]'
 
 ## Quick start
 
+**Audit first — zero setup.** cram reads the session transcripts your tools already write:
+
+```bash
+cd your-repo
+cram audit             # where do tokens go? evidence + findings
+cram audit --report    # the same, as shareable markdown
+```
+
+**Then, if the findings point at repeated re-discovery,** set up the context layer:
+
 ```bash
 cd your-repo
 
 # 1. One-time setup
 cram init
-#   → scans your repo, generates ARCHITECTURE.md + SYMBOLS.md via a cheap model
+#   → scans your repo: ARCHITECTURE.md via a cheap model, SYMBOLS.md deterministically
 #   → scaffolds DECISIONS.md + GOTCHAS.md for you to fill in
 #   → installs a git post-commit hook to keep context fresh
 
@@ -52,6 +71,98 @@ git commit -m "chore: init cram-ai context layer"
 ```
 
 Then wire up your tool of choice — [MCP](#mcp-delivery) or [file-based delivery](#file-based-delivery).
+
+---
+
+## Session audit
+
+`cram audit` measures how much of each session is spent on navigation vs. actual work:
+
+```bash
+cram audit           # last 30 days for this repo
+cram audit --days 7  # tighter window
+cram audit --all     # all projects
+cram audit --json    # structured output for dashboards / scripts
+cram audit --report [FILE]           # shareable markdown report
+cram audit --compare PATH_A PATH_B   # side-by-side A/B of two checkouts
+cram audit --reingest                # ignore the cache, re-parse everything
+```
+
+`--compare` prints both checkouts' metrics with deltas — built for before/after
+experiments around *any* change: a context layer, prompt changes, tool-output
+truncation, model routing. Alternate tasks between the checkouts and compare.
+
+Output includes:
+
+```
+Avg reads before first edit:    8.2  ← primary metric
+Avg edits/session:              3.1
+Avg read-to-edit ratio:         2.6×  ~ normal
+Cache engagement:               18/24 sessions read from cache
+
+Pre-edit context share (measured):
+  Edit sessions:                16/24  (8 no-edit sessions excluded)
+  Pre-edit context share:       31%  of 1,580,000 eff. input tokens
+  Pre-edit spend/session:       ~41,200 eff. tokens  (~$0.1236, anthropic pricing)
+
+Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
+```
+
+Every number is labeled **measured** or **estimated**. The **pre-edit context share**
+is measured and deliberately *descriptive*: it is the input-side token spend (input +
+cache-weighted traffic, provider multipliers applied) of all requests before the
+session's first edit, divided by the session's total input-side spend — summed across
+sessions, so long sessions weigh more. Pre-edit reading is not automatically waste
+(sometimes inspecting unfamiliar code *is* the work), which is why the share is just
+a description; the *avoidable* patterns — repeated cross-session reads, oversized
+carried results, retry loops — are called out separately as findings. Conservatisms:
+no-edit sessions are excluded (reviews, Q&A, abandoned runs — reading may have been
+the job), sessions without token usage in their transcripts (e.g. Cursor) are excluded
+and counted as unmeasured,
+output-token spend is not included, and with fewer than 5 measured sessions the share
+is marked preliminary. The older per-file cost lines remain labeled as estimates.
+
+The cache-engagement line is the silent-failure check: a session that wrote cache but
+never read it back paid the 1.25× write price for nothing — a signal that prompt
+caching isn't engaging (prefix instability, sub-floor prefix, or a misconfigured proxy).
+
+The report also measures **context bloat** — usually the largest waste bucket: average
+context re-read per request, the share of read-cost in the final third of turns
+(33% = flat; higher means the context is growing), the *carried cost* of oversized
+tool results (a big result entering at turn k is re-read by every later turn), and
+redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20000).
+
+**Retry loops** are reported when present: failed tool calls per session (`is_error`
+tool results — each usually means a retry follows) and same-file re-edits per session
+(a couple is normal; sustained churn means the agent is thrashing).
+
+**Top repeated files** lists the files agents read most, with how many sessions read
+them — cross-session repetition is the concrete evidence for what belongs in a repo
+briefing. (File paths come from Claude/Cursor tool calls; Codex shell reads don't
+carry structured paths and aren't attributed.)
+
+**Findings** close the loop from numbers to action: deterministic rules (no LLM
+judging) that fire only above conservative thresholds, each pairing evidence with a
+fix — repeated cross-session reads → put them in a repo briefing; oversized carried
+tool results → truncate output; cache written but never read → fix caching config;
+sustained failed commands → capture a gotcha; heavy context growth → trim results or
+tune compaction. Findings appear in the report and under `findings` in `--json`.
+
+Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
+(default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
+are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,
+`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers. Pricing and
+thresholds are applied at query time, so changing them never requires a re-parse.
+
+Parsed transcripts are cached in a local SQLite **event store**
+(`~/.local/share/cram-ai/audit.db`, or `$XDG_DATA_HOME/cram-ai/audit.db`; override the
+path with `CRAM_AUDIT_DB`, `:memory:` accepted). Transcripts are re-parsed only when
+they change, so repeat audits are fast. The store is a cache, never source data: it
+rebuilds itself automatically when the schema or parser changes, and if it can't be
+opened at all the audit still runs (uncached) with a note on stderr. `--reingest`
+(alias `--no-cache`) forces a full re-parse.
+
+Re-audit after applying any fix to verify it actually moved the numbers.
 
 ---
 
@@ -264,12 +375,12 @@ cram ui
 
 Six tabs:
 
-- **Audit** (default) — the orientation-tax numbers for the last 30 days: reads before
-  first edit, read-to-edit ratio with band, cache writes/reads per session, a
-  cache-engagement check (sessions that wrote cache but never read it back),
-  context-bloat metrics (context per request, read-cost tail share, carried cost of
-  oversized tool results, redundant re-reads), and a weekly trend of the primary
-  metric. The dashboard opens on the number, not the knobs.
+- **Audit** (default) — the session-audit numbers for the last 30 days: pre-edit
+  context share (measured), no-edit session split, reads before first edit,
+  read-to-edit ratio with band, cache engagement (sessions that wrote cache but
+  never read it back), context-bloat metrics (context per request, read-cost tail
+  share, carried cost of oversized tool results, redundant re-reads), top repeated
+  files, and a weekly trend. The dashboard opens on the number, not the knobs.
 - **Decisions** — pending agent proposals at top, accepted history below.
   Press `a` to approve the focused entry, `d` to delete it. Badge shows pending count.
 - **Sessions** — recent Claude Code sessions with reads, edits, read-to-edit ratio, and
@@ -286,97 +397,6 @@ Six tabs:
 
 Each tab refreshes its data when you switch to it. Auto-refreshes every 30 seconds.
 `r` forces a full refresh, `q` quits.
-
----
-
-## Orientation tax measurement
-
-`cram audit` measures how much of each session is spent on navigation vs. actual work:
-
-```bash
-cram audit           # last 30 days for this repo
-cram audit --days 7  # tighter window
-cram audit --all     # all projects
-cram audit --json    # structured output for dashboards / scripts
-cram audit --compare PATH_A PATH_B   # side-by-side A/B of two checkouts
-cram audit --reingest                # ignore the cache, re-parse everything
-```
-
-`--compare` prints both checkouts' metrics with deltas — built for attribution
-experiments: keep one checkout wired with cram, one plain, alternate tasks between
-them, and compare after a couple of weeks.
-
-Output includes:
-
-```
-Avg reads before first edit:    8.2  ← primary metric
-Avg edits/session:              3.1
-Avg read-to-edit ratio:         2.6×  ~ normal
-Cache engagement:               18/24 sessions read from cache
-
-Pre-edit context share (measured):
-  Edit sessions:                16/24  (8 no-edit sessions excluded)
-  Pre-edit context share:       31%  of 1,580,000 eff. input tokens
-  Pre-edit spend/session:       ~41,200 eff. tokens  (~$0.1236, anthropic pricing)
-
-Ratio guide: < 2× good · 2–5× normal · > 5× context isn't landing
-```
-
-Every number is labeled **measured** or **estimated**. The **pre-edit context share**
-is measured and deliberately *descriptive*: it is the input-side token spend (input +
-cache-weighted traffic, provider multipliers applied) of all requests before the
-session's first edit, divided by the session's total input-side spend — summed across
-sessions, so long sessions weigh more. Pre-edit reading is not automatically waste
-(sometimes inspecting unfamiliar code *is* the work), which is why the share is just
-a description; the *avoidable* patterns — repeated cross-session reads, oversized
-carried results, retry loops — are called out separately as findings. Conservatisms:
-no-edit sessions are excluded (reviews, Q&A, abandoned runs — reading may have been
-the job), sessions without token usage in their transcripts (e.g. Cursor) are excluded
-and counted as unmeasured,
-output-token spend is not included, and with fewer than 5 measured sessions the share
-is marked preliminary. The older per-file cost lines remain labeled as estimates.
-
-The cache-engagement line is the silent-failure check: a session that wrote cache but
-never read it back paid the 1.25× write price for nothing — a signal that prompt
-caching isn't engaging (prefix instability, sub-floor prefix, or a misconfigured proxy).
-
-The report also measures **context bloat** — usually the largest waste bucket: average
-context re-read per request, the share of read-cost in the final third of turns
-(33% = flat; higher means the context is growing), the *carried cost* of oversized
-tool results (a big result entering at turn k is re-read by every later turn), and
-redundant same-file reads. Thresholds: `CRAM_AUDIT_BIG_RESULT_BYTES` (default 20000).
-
-**Retry loops** are reported when present: failed tool calls per session (`is_error`
-tool results — each usually means a retry follows) and same-file re-edits per session
-(a couple is normal; sustained churn means the agent is thrashing).
-
-**Top repeated files** lists the files agents read most, with how many sessions read
-them — cross-session repetition is the concrete evidence for what belongs in a repo
-briefing. (File paths come from Claude/Cursor tool calls; Codex shell reads don't
-carry structured paths and aren't attributed.)
-
-**Findings** close the loop from numbers to action: deterministic rules (no LLM
-judging) that fire only above conservative thresholds, each pairing evidence with a
-fix — repeated cross-session reads → put them in a repo briefing; oversized carried
-tool results → truncate output; cache written but never read → fix caching config;
-sustained failed commands → capture a gotcha; heavy context growth → trim results or
-tune compaction. Findings appear in the report and under `findings` in `--json`.
-
-Dollar attribution is **provider-pluggable**: set `CRAM_PROVIDER` to `anthropic`
-(default), `openai`, `gemini`, or `local` (zero-dollar — the cost is latency). Prices
-are representative defaults; override per field with `CRAM_PRICE_INPUT_PER_MTOK`,
-`CRAM_CACHE_WRITE_MULT`, `CRAM_CACHE_READ_MULT` for billing-grade numbers. Pricing and
-thresholds are applied at query time, so changing them never requires a re-parse.
-
-Parsed transcripts are cached in a local SQLite **event store**
-(`~/.local/share/cram-ai/audit.db`, or `$XDG_DATA_HOME/cram-ai/audit.db`; override the
-path with `CRAM_AUDIT_DB`, `:memory:` accepted). Transcripts are re-parsed only when
-they change, so repeat audits are fast. The store is a cache, never source data: it
-rebuilds itself automatically when the schema or parser changes, and if it can't be
-opened at all the audit still runs (uncached) with a note on stderr. `--reingest`
-(alias `--no-cache`) forces a full re-parse.
-
-Run before and after adopting cram to measure the reduction.
 
 ---
 
@@ -437,7 +457,6 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 **Where health surfaces:**
 - `cram status` — per-file age table + health line with score, band, and commit count
 - `cram ui` → Health tab — staleness score + per-file token budgets + active task slots
-- Tray badge — shows band + score (`stale 6/10`) with band-appropriate color
 - `get_health()` MCP tool — deterministic markdown block the agent can call before trusting context
 - `get_context()` — prepends a one-line staleness warning when band is `stale` or `critical`
 - `cram sync` — warns to stderr after regenerating if any frozen file exceeds its soft token budget
@@ -446,19 +465,20 @@ The score falls back to an mtime check when git is unavailable. The critical thr
 
 | File | Default budget | Override |
 |---|---|---|
-| `ARCHITECTURE.md` | 2,000 tok | `CRAM_BUDGET_ARCHITECTURE` |
-| `DECISIONS.md` | 600 tok | `CRAM_BUDGET_DECISIONS` |
-| `GOTCHAS.md` | 400 tok | `CRAM_BUDGET_GOTCHAS` |
-| `CURRENT_TASK.md` | 800 tok | `CRAM_BUDGET_TASK` |
+| `ARCHITECTURE.md` | 3,000 tok | `CRAM_BUDGET_ARCHITECTURE` |
+| `DECISIONS.md` | 1,500 tok | `CRAM_BUDGET_DECISIONS` |
+| `GOTCHAS.md` | 800 tok | `CRAM_BUDGET_GOTCHAS` |
+| `CURRENT_TASK.md` | 2,000 tok | `CRAM_BUDGET_TASK` |
 | `SYMBOLS.md` | no budget | scales with repo size |
 
 ---
 
 ## Team and concurrency
 
-cram is designed for **one developer, one repo checkout**. Context files live in
-`.ai-context/` which is typically gitignored, so each developer works with their own
-independent context.
+cram is designed for **one developer, one repo checkout**. The five context files in
+`.ai-context/` are meant to be committed and shared via git (that's how teammates get
+them); session/runtime state inside `.ai-context/` is gitignored by an ignore file
+`cram init` writes. There is no live coordination between checkouts.
 
 | Scenario | Works? |
 |---|---|
@@ -486,7 +506,7 @@ across different checkouts or machines.
 | `cram gotcha "..." [path]` | Append a non-obvious trap to GOTCHAS.md |
 | `cram continue [path]` | Extend grace period — keep context across a mid-task commit |
 | `cram status [path]` | Show each context file with age, line count, and token budget status |
-| `cram audit [--days N] [--all] [--json] [--reingest]` | Measure reads-before-edit, read-to-edit ratio, and cache engagement from Claude Code transcripts |
+| `cram audit [--days N] [--all] [--json] [--report [FILE]] [--compare A B] [--reingest]` | Audit Claude Code / Cursor / Codex transcripts: pre-edit context share, context bloat, retry loops, findings; `--report` emits shareable markdown |
 | `cram ui [path]` | TUI dashboard — pending decisions, session efficiency, context health (requires `cram-ai[tui]`) |
 | `cram benchmark [path]` | Show token and cost comparison across delivery strategies |
 | `cram doctor [path]` | Health check — models, hooks, git, context files |
@@ -536,12 +556,12 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 | `AICONTEXT_TASKS_PER_SESSION` | `4` | Assumed tasks per cache window (used by `cram benchmark`) |
 | `CRAM_TASK_GRACE_SECONDS` | `600` | Seconds after `cram task` before a commit resets context |
 | `CRAM_STALE_CRITICAL_COMMITS` | `10` | Commits since last sync that maps to staleness score 10 (critical). Lower = more sensitive. |
-| `CRAM_BUDGET_ARCHITECTURE` | `2000` | Soft token budget for ARCHITECTURE.md — warns in `cram status` and `cram sync` when exceeded |
-| `CRAM_BUDGET_DECISIONS` | `600` | Soft token budget for DECISIONS.md |
-| `CRAM_BUDGET_GOTCHAS` | `400` | Soft token budget for GOTCHAS.md |
-| `CRAM_BUDGET_TASK` | `800` | Soft token budget for CURRENT_TASK.md |
+| `CRAM_BUDGET_ARCHITECTURE` | `3000` | Soft token budget for ARCHITECTURE.md — warns in `cram status` and `cram sync` when exceeded |
+| `CRAM_BUDGET_DECISIONS` | `1500` | Soft token budget for DECISIONS.md |
+| `CRAM_BUDGET_GOTCHAS` | `800` | Soft token budget for GOTCHAS.md |
+| `CRAM_BUDGET_TASK` | `2000` | Soft token budget for CURRENT_TASK.md |
 | `CRAM_AUDIT_DB` | `~/.local/share/cram-ai/audit.db` | Audit event-store cache location (`:memory:` accepted) |
-| `CRAM_PROVIDER` | `anthropic` | Pricing table for audit dollar attribution: `anthropic` / `openai` / `gemini` / `local` |
+| `CRAM_PROVIDER` | `anthropic` | Pricing table for audit dollar attribution: `anthropic` / `openai` / `gemini` / `local` / `bedrock` / `vertex_ai` / `azure` |
 | `CRAM_PRICE_INPUT_PER_MTOK` | per provider | Override base input price ($/1M tokens) for audit cost estimates |
 | `CRAM_CACHE_WRITE_MULT` | per provider | Override cache-write multiplier (1.25 on Anthropic) |
 | `CRAM_CACHE_READ_MULT` | per provider | Override cache-read multiplier (0.10 on Anthropic) |
@@ -550,9 +570,10 @@ Also supports: AWS Bedrock, GCP Vertex AI, Azure OpenAI, custom LiteLLM proxies 
 
 ---
 
-## 💰 Real-world token consumption
+## 💰 Where session tokens go (illustrative model)
 
-Without context pre-loading, an agent spends the first few exchanges of every session
+The numbers below are a model, not a measurement — run `cram audit` for your real ones.
+Without context pre-loading, an agent typically spends the first exchanges of a session
 re-discovering the codebase — reading files, running searches, building orientation from scratch.
 
 **What a typical session consumes (no cram):**
@@ -614,10 +635,17 @@ below the threshold.
 
 ---
 
-## Running tests
+## Contributing
+
+Issues and PRs welcome. Every PR runs the test suite on Python 3.10–3.13 via GitHub
+Actions; please keep it green. Audit-metric changes deserve special care — legacy
+metrics are pinned by a parity suite (`tests/test_audit_parity.py`), and new metrics
+should be additive and labeled measured or estimated.
+
+**Running tests:**
 
 ```bash
-pip install pytest
+pip install -e '.[mcp]' pytest
 pytest
 ```
 
