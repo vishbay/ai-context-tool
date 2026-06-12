@@ -160,6 +160,20 @@ class TestClaudeParity:
         assert r['tail_share'] is not None
         assert r['context_growth_factor'] is not None
 
+    def test_context_mode_key_is_additive(self, tmp_path):
+        # The new context_mode flag must be a pure addition: absent from the
+        # frozen oracle, present in current, and perturbing no frozen value.
+        path = _make_transcript([
+            ('Read', {'file_path': 'a.py'}),
+            ('ctx_search', {'query': 'x'}),
+            ('Edit', {'file_path': 'a.py'}),
+        ], tmp_path)
+        old = legacy._analyze_transcript(path)
+        new = current._analyze_transcript(path)
+        _assert_frozen(old, new)                 # every legacy value unchanged
+        assert 'context_mode' not in old
+        assert new['context_mode'] is True
+
     def test_short_session_none_fields(self, tmp_path):
         path = str(tmp_path / 's.jsonl')
         _write_raw(path, [_usage(cache_read=10_000)])

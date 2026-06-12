@@ -366,6 +366,107 @@ class TestParseFailureSurfacing:
         assert 'failed to parse' in capsys.readouterr().err
 
 
+class TestContextModeDetection:
+    """context-mode (ctx_* tools) detection: predicate, derive flag, roundtrip."""
+
+    def test_predicate_matches_bare_and_namespaced(self):
+        f = audit_events._is_context_tool
+        assert f('ctx_search')
+        assert f('ctx_execute_file')
+        assert f('mcp__context-mode__ctx_search')  # MCP-namespaced leaf
+        assert f('mcp__context-mode__resume')      # server name in path
+        assert not f('Read')
+        assert not f('mcp__other__do_thing')
+        assert not f(None)
+        assert not f('')
+
+    def test_derive_flag_true_when_ctx_tool_present(self, tmp_path):
+        path = _make_transcript([
+            ('Read', {'file_path': 'a.py'}),
+            ('ctx_search', {'query': 'foo'}),
+            ('Edit', {'file_path': 'a.py'}),
+        ], tmp_path)
+        meta, events = _parse(path)
+        sess = audit_events.derive_session(meta, events, big_result_bytes=20_000)
+        assert sess['context_mode'] is True
+
+    def test_derive_flag_false_without_ctx_tool(self, tmp_path):
+        path = _make_transcript([
+            ('Read', {'file_path': 'a.py'}),
+            ('Edit', {'file_path': 'a.py'}),
+        ], tmp_path)
+        meta, events = _parse(path)
+        sess = audit_events.derive_session(meta, events, big_result_bytes=20_000)
+        assert sess['context_mode'] is False
+
+    def test_flag_survives_store_roundtrip(self, tmp_path):
+        # ctx_* calls are 'tool_call' events; their tool name must survive the
+        # SQLite cache so detection works on a warm (cache-replayed) read.
+        path = _make_transcript([
+            ('ctx_execute', {'code': 'print(1)'}),
+            ('Edit', {'file_path': 'a.py'}),
+        ], tmp_path)
+        store = AuditStore.open(str(tmp_path / 'cache.db'))
+        _ingest_claude(store, path)
+        sid, stored_meta = store.sessions_for_file(path)[0]
+        replayed = audit_events.derive_session(
+            stored_meta, store.events_for_session(sid), big_result_bytes=20_000)
+        assert replayed['context_mode'] is True
+        store.close()
+
+
+class TestContextModeSegment:
+    """collect_audit segments the pool only when both on/off sessions exist."""
+
+    def _setup(self, tmp_path, monkeypatch, with_ctx=True, with_plain=True):
+        import cram.audit as audit_mod
+        td = tmp_path / 'proj'
+        td.mkdir()
+        if with_ctx:
+            with open(td / 'ctx.jsonl', 'w') as f:
+                f.write(json.dumps({'type': 'tool_use', 'name': 'ctx_search',
+                                    'input': {'query': 'x'}}) + '\n')
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Edit',
+                                    'input': {'file_path': 'a.py'}}) + '\n')
+        if with_plain:
+            with open(td / 'plain.jsonl', 'w') as f:
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Read',
+                                    'input': {'file_path': 'b.py'}}) + '\n')
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Edit',
+                                    'input': {'file_path': 'b.py'}}) + '\n')
+        monkeypatch.setattr(audit_mod, '_project_transcript_dir',
+                            lambda r, d=str(td): d)
+        monkeypatch.setattr(audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(audit_mod, '_cursor_storage_root', lambda: None)
+        monkeypatch.setattr(audit_mod, '_codex_sessions_dir', lambda: None)
+        return audit_mod
+
+    def test_segment_present_when_mixed(self, tmp_path, monkeypatch):
+        audit_mod = self._setup(tmp_path, monkeypatch)
+        data = audit_mod.collect_audit(str(tmp_path), days=365)
+        seg = data['context_mode_segment']
+        assert seg is not None
+        assert seg['on']['sessions'] == 1
+        assert seg['off']['sessions'] == 1
+
+    def test_segment_none_when_no_ctx_sessions(self, tmp_path, monkeypatch):
+        audit_mod = self._setup(tmp_path, monkeypatch, with_ctx=False)
+        data = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert data['context_mode_segment'] is None
+
+    def test_segment_none_when_all_ctx_sessions(self, tmp_path, monkeypatch):
+        audit_mod = self._setup(tmp_path, monkeypatch, with_plain=False)
+        data = audit_mod.collect_audit(str(tmp_path), days=365)
+        assert data['context_mode_segment'] is None
+
+    def test_run_audit_prints_segment(self, tmp_path, monkeypatch, capsys):
+        audit_mod = self._setup(tmp_path, monkeypatch)
+        audit_mod.run_audit(str(tmp_path), days=365)
+        out = capsys.readouterr().out
+        assert 'Context tool segment' in out
+        assert 'Carried result cost/session' in out
+
+
 class TestIngestProgress:
     """A large cold ingest announces itself on stderr; warm runs stay quiet."""
 
