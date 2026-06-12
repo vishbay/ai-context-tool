@@ -102,6 +102,10 @@ class AuditStore:
         self.con = con
         self.path = path
         self.ephemeral = ephemeral
+        # Paths whose parse failed during THIS run (mark_failed calls), so the
+        # CLI can warn that the numbers may be incomplete. The parse_ok column
+        # is the persistent retry ledger; this is just the per-run view.
+        self.run_failures: list[str] = []
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -214,6 +218,7 @@ class AuditStore:
 
     def mark_failed(self, path: str, adapter: str, mtime: float, size: int) -> None:
         """Record a failed parse without discarding any previous good snapshot."""
+        self.run_failures.append(path)
         with self.con:
             self.con.execute(
                 'INSERT INTO files VALUES (?, ?, ?, ?, ?, 0)'

@@ -113,6 +113,13 @@ class TestLedger:
         assert store.needs_ingest(transcript, st.st_mtime, st.st_size + 100)
         store.close()
 
+    def test_mark_failed_records_run_failure(self, tmp_path):
+        store = AuditStore.open(str(tmp_path / 'cache.db'))
+        assert store.run_failures == []
+        store.mark_failed('/t.jsonl', 'claude', 1.0, 10)
+        assert store.run_failures == ['/t.jsonl']
+        store.close()
+
     def test_failed_parse_retried_and_keeps_old_snapshot(self, tmp_path):
         transcript = _make_transcript([('Read', {})], tmp_path)
         store = AuditStore.open(str(tmp_path / 'cache.db'))
@@ -284,3 +291,109 @@ class TestIncrementalCollect:
         assert audit_mod.collect_audit(str(tmp_path), days=365)['sessions'] == 2
         os.remove(paths[0])
         assert audit_mod.collect_audit(str(tmp_path), days=365)['sessions'] == 1
+
+
+class TestParseFailureSurfacing:
+    """Live transcripts that fail to parse must be visible, not silent."""
+
+    def _setup(self, tmp_path, monkeypatch, corrupt=False, good=True):
+        import cram.audit as audit_mod
+        td = tmp_path / 'proj'
+        td.mkdir()
+        if good:
+            with open(td / 's0.jsonl', 'w') as f:
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Read',
+                                    'input': {'file_path': 'a.py'}}) + '\n')
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Edit',
+                                    'input': {'file_path': 'a.py'}}) + '\n')
+        bad = None
+        if corrupt:
+            # A directory named *.jsonl: stat succeeds, open() raises, so
+            # parse_claude returns None — same path as an unreadable file.
+            bad = td / 'bad.jsonl'
+            bad.mkdir()
+        monkeypatch.setattr(audit_mod, '_project_transcript_dir',
+                            lambda r, d=str(td): d)
+        monkeypatch.setattr(audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(audit_mod, '_cursor_storage_root', lambda: None)
+        monkeypatch.setattr(audit_mod, '_codex_sessions_dir', lambda: None)
+        return audit_mod, str(bad) if bad else None
+
+    def test_warns_and_audit_still_succeeds(self, tmp_path, monkeypatch, capsys):
+        audit_mod, bad = self._setup(tmp_path, monkeypatch, corrupt=True)
+        audit_mod.run_audit(str(tmp_path), days=365)
+        out = capsys.readouterr()
+        assert 'Sessions analysed' in out.out
+        assert '1 transcript failed to parse' in out.err
+        assert bad not in out.err  # paths only with CRAM_DEBUG
+
+    def test_debug_lists_paths(self, tmp_path, monkeypatch, capsys):
+        audit_mod, bad = self._setup(tmp_path, monkeypatch, corrupt=True)
+        monkeypatch.setenv('CRAM_DEBUG', '1')
+        audit_mod.run_audit(str(tmp_path), days=365)
+        assert bad in capsys.readouterr().err
+
+    def test_json_includes_parse_failures_count(self, tmp_path, monkeypatch, capsys):
+        audit_mod, _ = self._setup(tmp_path, monkeypatch, corrupt=True)
+        audit_mod.run_audit(str(tmp_path), days=365, as_json=True)
+        out = capsys.readouterr()
+        assert json.loads(out.out)['parse_failures'] == 1
+        assert 'failed to parse' in out.err
+
+    def test_clean_run_no_warning(self, tmp_path, monkeypatch, capsys):
+        audit_mod, _ = self._setup(tmp_path, monkeypatch)
+        audit_mod.run_audit(str(tmp_path), days=365, as_json=True)
+        out = capsys.readouterr()
+        assert 'failed to parse' not in out.err
+        assert json.loads(out.out)['parse_failures'] == 0
+
+    def test_all_failed_still_warns(self, tmp_path, monkeypatch, capsys):
+        # Every transcript failing → data is None, but the warning must still
+        # appear so "no sessions" isn't mistaken for a quiet month.
+        audit_mod, _ = self._setup(tmp_path, monkeypatch, corrupt=True, good=False)
+        audit_mod.run_audit(str(tmp_path), days=365)
+        out = capsys.readouterr()
+        assert 'No sessions found' in out.out
+        assert 'failed to parse' in out.err
+
+    def test_warm_run_still_warns(self, tmp_path, monkeypatch, capsys):
+        # parse_ok=0 files are retried every run, so the warning persists
+        # until the transcript is fixed or ages out of the window.
+        audit_mod, _ = self._setup(tmp_path, monkeypatch, corrupt=True)
+        audit_mod.run_audit(str(tmp_path), days=365)
+        capsys.readouterr()
+        audit_mod.run_audit(str(tmp_path), days=365)
+        assert 'failed to parse' in capsys.readouterr().err
+
+
+class TestIngestProgress:
+    """A large cold ingest announces itself on stderr; warm runs stay quiet."""
+
+    def _setup(self, tmp_path, monkeypatch, n):
+        import cram.audit as audit_mod
+        td = tmp_path / 'proj'
+        td.mkdir()
+        for i in range(n):
+            with open(td / f's{i}.jsonl', 'w') as f:
+                f.write(json.dumps({'type': 'tool_use', 'name': 'Read',
+                                    'input': {'file_path': f'{i}.py'}}) + '\n')
+        monkeypatch.setattr(audit_mod, '_project_transcript_dir',
+                            lambda r, d=str(td): d)
+        monkeypatch.setattr(audit_mod, '_cursor_agent_transcripts_dir', lambda: None)
+        monkeypatch.setattr(audit_mod, '_cursor_storage_root', lambda: None)
+        monkeypatch.setattr(audit_mod, '_codex_sessions_dir', lambda: None)
+        return audit_mod
+
+    def test_cold_run_over_threshold_announces(self, tmp_path, monkeypatch, capsys):
+        import cram.audit as audit_mod
+        n = audit_mod.INGEST_PROGRESS_MIN + 1
+        audit_mod = self._setup(tmp_path, monkeypatch, n)
+        audit_mod.collect_audit(str(tmp_path), days=365)
+        assert f'ingesting {n} transcripts' in capsys.readouterr().err
+        audit_mod.collect_audit(str(tmp_path), days=365)  # warm: cached
+        assert 'ingesting' not in capsys.readouterr().err
+
+    def test_small_cold_run_is_silent(self, tmp_path, monkeypatch, capsys):
+        audit_mod = self._setup(tmp_path, monkeypatch, 3)
+        audit_mod.collect_audit(str(tmp_path), days=365)
+        assert 'ingesting' not in capsys.readouterr().err
