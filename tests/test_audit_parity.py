@@ -18,12 +18,34 @@ import json
 import math
 import sqlite3
 
+import pytest
+
+import cram
 import cram.audit as current
 import tests.legacy_audit_reference as legacy
 from tests.test_audit import (
     _make_transcript, _write_cursor_jsonl, _write_codex_jsonl,
     _exec_cmd, _apply_patch, _token_count,
 )
+
+
+def test_frozen_oracle_removal_trigger():
+    """Fails once the oracle's removal trigger passes, so it can't linger.
+
+    tests/legacy_audit_reference.py (1,100+ lines) is scheduled for deletion
+    after the P0 analysis completes or v0.5.0 ships, whichever comes first —
+    see https://github.com/vishbay/cram-ai/issues/9. The date is a backstop in
+    case neither lands.
+    """
+    version = tuple(int(p) for p in cram.__version__.split('.')[:2])
+    backstop = datetime.date(2026, 9, 30)
+    if version >= (0, 5) or datetime.date.today() > backstop:
+        pytest.fail(
+            'Removal trigger for tests/legacy_audit_reference.py has passed: '
+            'delete the frozen oracle and this parity suite (issue #9), or '
+            'consciously re-pin with a new trigger.')
+    pytest.skip('placeholder — fails after v0.5.0 or 2026-09-30 '
+                'to force frozen-oracle removal (issue #9)')
 
 
 def _deep_equal(a, b, path='$'):

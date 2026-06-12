@@ -1,4 +1,13 @@
-"""cram audit — measure orientation tax from Claude Code session transcripts."""
+"""cram audit — measure orientation tax from Claude Code session transcripts.
+
+FROZEN ORACLE — verbatim copy of cram/audit.py as it was before the
+event-store refactor. Do not edit; it exists only so tests/test_audit_parity.py
+can pin the pre-pivot numbers.
+
+REMOVE AFTER: P0 analysis complete or v0.5.0, whichever comes first
+(date backstop: 2026-09-30). Tracking: https://github.com/vishbay/cram-ai/issues/9
+A guard test in tests/test_audit_parity.py fails once the trigger passes.
+"""
 
 from __future__ import annotations
 import json
