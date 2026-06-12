@@ -304,6 +304,25 @@ def _derive(meta, events, repo_root: str | None = None) -> dict | None:
         return None
 
 
+def _segment_metrics(sessions: list[dict]) -> dict:
+    """Context-bloat headline metrics for one segment (the buckets context-mode
+    claims to fix: carried oversized results, context growth, peak context)."""
+    n = len(sessions)
+    if not n:
+        return {'sessions': 0}
+    growths = [s['context_growth_factor'] for s in sessions
+               if s['context_growth_factor'] is not None]
+    return {
+        'sessions':                  n,
+        'avg_reads_before_edit':     sum(s['reads_before_edit'] for s in sessions) / n,
+        'carried_cost_per_session':  sum(s['carried_read_tokens'] for s in sessions) / n
+                                     * CACHE_READ_MULT * AUDIT_BASE_PRICE,
+        'sessions_with_big_results': sum(1 for s in sessions if s['big_results']),
+        'avg_context_growth':        sum(growths) / len(growths) if growths else None,
+        'avg_peak_context':          sum(s['peak_context'] for s in sessions) / n,
+    }
+
+
 def _analyze_transcript_cached(store, path: str) -> dict | None:
     """Cache-backed equivalent of _analyze_transcript (for the TUI)."""
     out = None
@@ -506,6 +525,15 @@ def _collect_audit_inner(store, repo_root: str, days: int,
 
     recent = sorted(all_sessions, key=lambda s: s['mtime'], reverse=True)[:20]
 
+    # Neutral-auditor view: split on whether a context tool was active. Only
+    # meaningful when the pool actually contains both — otherwise it's noise.
+    cm_on  = [s for s in all_sessions if s.get('context_mode')]
+    cm_off = [s for s in all_sessions if not s.get('context_mode')]
+    context_mode_segment = (
+        {'on': _segment_metrics(cm_on), 'off': _segment_metrics(cm_off)}
+        if cm_on and cm_off else None
+    )
+
     data = {
         'days':                      days,
         'sessions':                  total,
@@ -557,6 +585,8 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         # Live transcripts whose parse failed this run; their sessions are
         # missing from every number above.
         'parse_failures':            len(store.run_failures),
+        # None unless the window contains both context-tool-on and -off sessions.
+        'context_mode_segment':      context_mode_segment,
     }
     data['findings'] = audit_findings.derive_findings(data)
     return data
@@ -680,6 +710,26 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
         for fp, r, n in repeated_files[:5]:
             disp = audit_events.repo_rel(fp, repo_root)
             print(f"    {r:>3}× in {n} session{'s' if n != 1 else ''}   {disp}")
+
+    seg = data.get('context_mode_segment')
+    if seg:
+        on, off = seg['on'], seg['off']
+        print()
+        print(f"  Context tool segment (ctx_* active vs not — A/B without a second checkout):")
+        print(f"    {'Metric':<30} {'ctx on':>12} {'ctx off':>12}")
+        print(f"    {'Sessions':<30} {on['sessions']:>12} {off['sessions']:>12}")
+        print(f"    {'Reads before first edit':<30} {on['avg_reads_before_edit']:>12.1f} "
+              f"{off['avg_reads_before_edit']:>12.1f}")
+        print(f"    {'Carried result cost/session':<30} {'$' + format(on['carried_cost_per_session'], '.4f'):>12} "
+              f"{'$' + format(off['carried_cost_per_session'], '.4f'):>12}")
+        print(f"    {'Sessions w/ oversized result':<30} {on['sessions_with_big_results']:>12} "
+              f"{off['sessions_with_big_results']:>12}")
+        print(f"    {'Avg peak context (tokens)':<30} {on['avg_peak_context']:>12,.0f} "
+              f"{off['avg_peak_context']:>12,.0f}")
+        print(f"    → context-mode targets carried-result cost + peak context; "
+              f"this is whether it landed.")
+        print(f"      (ctx_* reads run in the sandbox, off-transcript — read the "
+              f"carried-cost/peak columns, not reads-before-edit.)")
 
     if data['findings']:
         print()

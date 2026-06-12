@@ -20,6 +20,25 @@ import re
 
 READ_TOOLS  = frozenset({'Read', 'read_file'})
 WRITE_TOOLS = frozenset({'Write', 'Edit', 'edit_file', 'write_file', 'NotebookEdit'})
+
+
+def _is_context_tool(name: str | None) -> bool:
+    """True for context-mode's ctx_* tools, bare or MCP-namespaced.
+
+    context-mode (github.com/mksglu/context-mode) ships an MCP server whose
+    tools are all ctx_*-prefixed. Detecting them lets the audit segment
+    "context tool active" vs not — cram as neutral auditor, not a competing
+    context layer.
+
+    Claude Code surfaces MCP tools as 'mcp__<server>__<tool>', so we match the
+    leaf after the last '__' as well as the bare name. NOTE: the exact surfaced
+    name should be validated against a real context-mode transcript before this
+    is relied on — it's the one assumption not verifiable from the source alone.
+    """
+    if not name:
+        return False
+    leaf = name.rsplit('__', 1)[-1]
+    return leaf.startswith('ctx_') or 'context-mode' in name
 BASH_READ_CMDS = ('cat ', 'head ', 'grep ', 'find ', 'ls ', 'tail ',
                   'nl ',   # number lines — Codex's preferred file viewer
                   'sed ',  # sed -n '..p' pattern used by Codex to read ranges
@@ -445,6 +464,10 @@ def derive_session(meta: SessionMeta, events: list[Event],
     adapter = meta.adapter
     repo_sep = (repo_root.rstrip(os.sep) + os.sep) if repo_root else os.sep
 
+    # Scan all events (not just read/edit) — ctx_* calls are 'tool_call' events,
+    # which the metric loop below skips. Tool names survive the store roundtrip.
+    context_mode = any(_is_context_tool(ev.tool) for ev in events)
+
     def _under(p: str) -> bool:
         return p == repo_root or p.startswith(repo_sep)
 
@@ -600,6 +623,8 @@ def derive_session(meta: SessionMeta, events: list[Event],
         # Cursor: every path on a relevant event; Codex: empty (no paths).
         'read_file_counts':        read_counts,
         'edit_file_counts':        edit_counts,
+        # Additive: was a context tool (context-mode) active this session?
+        'context_mode':            context_mode,
     }
     # Legacy dicts carry a 'source' key only for non-Claude sessions.
     if meta.source != 'claude':
