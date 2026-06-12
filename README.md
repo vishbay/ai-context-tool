@@ -9,12 +9,13 @@ the transcripts already on your disk, and shows where the tokens went: how much 
 before the first edit, which files agents re-read session after session, oversized tool
 results carried turn after turn, retry loops. Every number is labeled **measured** or
 **estimated**, and deterministic findings pair evidence with a concrete fix. No setup, no
-instrumentation, nothing leaves your machine.
+instrumentation, and the audit is fully local — nothing leaves your machine.
 
 One of those fixes ships with cram: a **context layer** that pre-loads focused project, task,
 symbol, decision, and gotcha context so your tool arrives oriented instead of re-discovering
 the codebase each session. Apply a fix — cram's or any other — then re-audit to verify it
-actually helped.
+actually helped. (Unlike the audit, the context layer calls your configured model provider:
+`cram init` and `get_context` send code excerpts to it to build that context.)
 
 The context layer works with **Claude Code, Cursor, Windsurf, Zed, Codex, GitHub Copilot,
 Gemini CLI**, and any tool that reads a file on startup. Custom tool targets are supported
@@ -117,8 +118,10 @@ sessions, so long sessions weigh more. Pre-edit reading is not automatically was
 a description; the *avoidable* patterns — repeated cross-session reads, oversized
 carried results, retry loops — are called out separately as findings. Conservatisms:
 no-edit sessions are excluded (reviews, Q&A, abandoned runs — reading may have been
-the job), sessions without token usage in their transcripts (e.g. Cursor) are excluded
-and counted as unmeasured,
+the job), sessions without token usage in their transcripts are excluded and counted as
+unmeasured — in practice this makes the measured headline **Claude Code/Codex-only**:
+Cursor transcripts carry no token usage, so Cursor sessions always show as unmeasured
+(a `—` rather than a number) —
 output-token spend is not included, and with fewer than 5 measured sessions the share
 is marked preliminary. The older per-file cost lines remain labeled as estimates.
 

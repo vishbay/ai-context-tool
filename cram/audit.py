@@ -9,6 +9,7 @@ parse→derive wrappers), collect_audit, and the CLI report/compare commands.
 from __future__ import annotations
 import json
 import os
+import sys
 import glob
 import datetime
 
@@ -46,6 +47,9 @@ AUDIT_BASE_PRICE: float = float(os.environ.get(
 # carried (re-read) by every subsequent request in the session.
 # Override with: CRAM_AUDIT_BIG_RESULT_BYTES=20000
 BIG_RESULT_BYTES: int = int(os.environ.get('CRAM_AUDIT_BIG_RESULT_BYTES', '20000'))
+# A cold run ingesting more than this many transcripts announces itself on
+# stderr — otherwise a large first run reads as a hang.
+INGEST_PROGRESS_MIN: int = 50
 # Cache multipliers vs base input price (0.1x read / 1.25x write on Anthropic).
 CACHE_READ_MULT: float = _PRICING['cache_read_mult']
 CACHE_WRITE_MULT: float = _PRICING['cache_write_mult']
@@ -310,18 +314,25 @@ def _analyze_transcript_cached(store, path: str) -> dict | None:
 
 
 def collect_audit(repo_root: str, days: int = 30, all_projects: bool = False,
-                  *, reingest: bool = False) -> dict | None:
+                  *, reingest: bool = False,
+                  failures_out: list[str] | None = None) -> dict | None:
     """Analyse transcripts and return structured audit data, or None if none found.
 
     This is the data core shared by the CLI report, `cram audit --json`, and the
     TUI's Audit tab. Includes Cursor sessions when available (single-repo mode only).
     Transcripts are ingested into the local event store on first sight and
     re-parsed only when they change; reingest=True bypasses the cache.
+
+    failures_out, if given, receives the paths of transcripts that failed to
+    parse this run — populated even when the result is None, so callers can
+    warn that "no sessions" may really mean "nothing parsed".
     """
     store = audit_store.AuditStore.open()
     try:
         return _collect_audit_inner(store, repo_root, days, all_projects, reingest)
     finally:
+        if failures_out is not None:
+            failures_out.extend(store.run_failures)
         store.close()
 
 
@@ -339,18 +350,30 @@ def _collect_audit_inner(store, repo_root: str, days: int,
     all_sessions = []
     project_summaries = []
 
+    # Pre-scan Claude transcripts so a large cold ingest can announce itself.
+    claude_files: list[tuple[str, list[tuple[str, os.stat_result]]]] = []
     for proj_dir in dirs:
         name = os.path.basename(proj_dir.rstrip('/'))
         # Skip test/tmp dirs
         if 'pytest' in name or 'private-tmp' in name or 'private-var' in name:
             continue
-
-        files = glob.glob(proj_dir + '*.jsonl')
-        sessions = []
-        for f in files:
+        entries = []
+        for f in glob.glob(proj_dir + '*.jsonl'):
             st = os.stat(f)
-            if datetime.datetime.fromtimestamp(st.st_mtime) < cutoff:
-                continue
+            if datetime.datetime.fromtimestamp(st.st_mtime) >= cutoff:
+                entries.append((f, st))
+        claude_files.append((name, entries))
+
+    pending = sum(
+        1 for _, entries in claude_files for f, st in entries
+        if reingest or store.needs_ingest(f, st.st_mtime, st.st_size))
+    if pending > INGEST_PROGRESS_MIN:
+        print(f'cram audit: ingesting {pending} transcripts into the local '
+              f'event store …', file=sys.stderr)
+
+    for name, entries in claude_files:
+        sessions = []
+        for f, st in entries:
             for meta, events in _sessions_from_file(
                     store, f, 'claude', audit_events.parse_claude, reingest, st):
                 r = _derive(meta, events)
@@ -531,6 +554,9 @@ def _collect_audit_inner(store, repo_root: str, days: int,
         'projects':                  project_summaries,
         'weekly':                    weekly,
         'recent':                    recent,
+        # Live transcripts whose parse failed this run; their sessions are
+        # missing from every number above.
+        'parse_failures':            len(store.run_failures),
     }
     data['findings'] = audit_findings.derive_findings(data)
     return data
@@ -540,8 +566,18 @@ def run_audit(repo_root: str, days: int = 30, all_projects: bool = False,
               as_json: bool = False, reingest: bool = False) -> None:
     """Print an orientation-tax audit for the repo (or all projects)."""
 
+    failures: list[str] = []
     data = collect_audit(repo_root, days=days, all_projects=all_projects,
-                         reingest=reingest)
+                         reingest=reingest, failures_out=failures)
+
+    if failures:
+        n = len(failures)
+        print(f"⚠ {n} transcript{'s' if n != 1 else ''} failed to parse — "
+              f"numbers may be incomplete (CRAM_DEBUG=1 for paths)",
+              file=sys.stderr)
+        if os.environ.get('CRAM_DEBUG'):
+            for p in sorted(failures):
+                print(f"  {p}", file=sys.stderr)
 
     if data is None:
         if not all_projects and _project_transcript_dir(repo_root) is None:
