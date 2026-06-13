@@ -369,16 +369,38 @@ class TestParseFailureSurfacing:
 class TestContextModeDetection:
     """context-mode (ctx_* tools) detection: predicate, derive flag, roundtrip."""
 
-    def test_predicate_matches_bare_and_namespaced(self):
+    # The full, real context-mode tool surface, validated against authoritative
+    # sources (no live transcript existed at the time):
+    #   - tool names: literal ctx_* registrations in context-mode's src/server.ts
+    #   - server key: official .mcp.json.example registers as "context-mode"
+    #   - surfaced form: Claude Code renders MCP tools as mcp__<key>__<tool> with
+    #     the hyphen preserved (proven by real on-disk mcp__cram-ai__* calls)
+    # Combining those gives the exact surfaced names below. Update only if
+    # context-mode renames a tool or changes its recommended server key.
+    CONTEXT_MODE_TOOLS = (
+        'ctx_batch_execute', 'ctx_doctor', 'ctx_execute', 'ctx_execute_file',
+        'ctx_fetch_and_index', 'ctx_index', 'ctx_insight', 'ctx_purge',
+        'ctx_search', 'ctx_stats', 'ctx_upgrade',
+    )
+
+    def test_predicate_matches_real_surface_bare(self):
         f = audit_events._is_context_tool
-        assert f('ctx_search')
-        assert f('ctx_execute_file')
-        assert f('mcp__context-mode__ctx_search')  # MCP-namespaced leaf
-        assert f('mcp__context-mode__resume')      # server name in path
-        assert not f('Read')
-        assert not f('mcp__other__do_thing')
-        assert not f(None)
-        assert not f('')
+        for t in self.CONTEXT_MODE_TOOLS:
+            assert f(t), t
+
+    def test_predicate_matches_real_surface_mcp_namespaced(self):
+        # The actual form Claude Code emits: mcp__context-mode__<tool>.
+        f = audit_events._is_context_tool
+        for t in self.CONTEXT_MODE_TOOLS:
+            assert f(f'mcp__context-mode__{t}'), t
+
+    def test_predicate_rejects_other_tools_and_mcp_servers(self):
+        f = audit_events._is_context_tool
+        # Must not over-match neighboring tools or other MCP servers.
+        for n in ('Read', 'Edit', 'Write', 'Bash',
+                  'mcp__cram-ai__get_context', 'mcp__github__create_issue',
+                  'mcp__other__do_thing', 'context', '', None):
+            assert not f(n), n
 
     def test_derive_flag_true_when_ctx_tool_present(self, tmp_path):
         path = _make_transcript([
