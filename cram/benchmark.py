@@ -179,7 +179,7 @@ def run_benchmark(root: str) -> None:
     print(f"  Frozen prefix:  {frozen_tok:,} tok  ({frozen_tok / max(repo_tokens,1) * 100:.1f}% of repo)")
     print(f"  Per-task payload (tool result, never cache-written): ~{volatile_tok:,} tok\n")
 
-    # ── Daily orientation estimate (matches tray popup) ───────────
+    # ── Daily orientation estimate ───────────────────────────────
     print(f"  Daily orientation estimate  "
           f"·  {SESSIONS_PER_DAY} sessions/day × {TASKS_PER_SESSION} tasks/session\n")
     print(f"  {'':<14}{'orientation/day':>18}{'cram layer/day':>18}{'saved/day':>14}")

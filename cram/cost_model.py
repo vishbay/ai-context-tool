@@ -1,7 +1,6 @@
 """Single source of truth for cram's token-cost model.
 
-Used by the tray /metrics endpoint and `cram benchmark` so the numbers never
-diverge. Token counts are the len/4 heuristic — fine for relative comparison,
+Used by `cram benchmark` and the MCP health tool so the numbers never diverge. Token counts are the len/4 heuristic — fine for relative comparison,
 not billing.
 """
 from __future__ import annotations

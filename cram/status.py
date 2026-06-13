@@ -114,7 +114,7 @@ def staleness_band(score: int) -> str:
 
 
 def get_status_dict(root: str = '.') -> dict:
-    """Return structured status data for programmatic use (tray server, etc.)."""
+    """Return structured status data for programmatic use (MCP, CLI)."""
     root = os.path.abspath(root)
     context_dir = resolve_context_dir(root)
 

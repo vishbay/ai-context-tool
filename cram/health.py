@@ -1,7 +1,6 @@
 """Shared context health helper — staleness + per-file token + budget status.
 
-Used by the tray /metrics endpoint and the get_health() MCP tool so the two
-surfaces always report the same numbers.
+Used by the get_health() MCP tool and `cram status`.
 """
 from __future__ import annotations
 import os
